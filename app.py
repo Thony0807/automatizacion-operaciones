@@ -7,10 +7,8 @@ st.set_page_config(page_title="Herramientas SIGOF", layout="wide")
 
 if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
-    # Conexión pura: Solo le decimos a SIGOF que somos un navegador y usamos AJAX (sin forzar formatos)
     st.session_state.sesion_sigof.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })
 
 if 'autenticado' not in st.session_state:
@@ -23,6 +21,9 @@ def iniciar_sesion(usuario, clave):
         respuesta = st.session_state.sesion_sigof.post(url_login, data=payload)
         if "dashboard/modulos" in respuesta.url or respuesta.status_code == 200:
             if "Módulo de Lectura" in respuesta.text or "Módulo de Entrega" in respuesta.text:
+                 # Visita natural a las páginas para armar la sesión interna sin alertar al firewall
+                 st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/dashboard/modulos")
+                 st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                  return True
             elif "dashboard/modulos" in respuesta.url:
                  return True
@@ -96,11 +97,15 @@ else:
             btn_analizar = col1.button("Analizar Estado de Rutas")
             btn_asignar = col2.button("Iniciar Asignacion Masiva")
             
-            url_modulo = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
-            url_filtro = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listar_ordenes_pendientes_asignacion"
-            url_libros = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listarLibros"
             url_leer = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listacreatelibro2"
             url_guardar = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_guardarlecturistalibro"
+            
+            # Encabezados estrictamente necesarios para simular un navegador real
+            headers_ajax = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion",
+                "Origin": "http://sigof.distriluz.com.pe"
+            }
             
             total_filas = len(df)
             
@@ -116,44 +121,29 @@ else:
                 return c, s, r, i
 
             if btn_analizar:
-                st.info("Iniciando modulo y sincronizando memoria interna de SIGOF...")
-                st.session_state.sesion_sigof.get(url_modulo)
-                
+                st.info("Analizando rutas de forma directa...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 registro_consola = []
-                
-                ultimo_ciclo = None
-                ultimo_sector = None
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        estado = "[ RECHAZADO ] Faltan datos clave."
+                        estado = "[ RECHAZADO ] Faltan datos."
+                        registro_consola.append(f"Fila {index+1}: Celdas vacias.")
                     else:
-                        # PASO 1: SINCRONIZAR MEMORIA (Simula el clic del usuario al seleccionar Ciclo y Sector)
-                        if ciclo != ultimo_ciclo or sector != ultimo_sector:
-                            payload_filtro = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
-                            try:
-                                res_f = st.session_state.sesion_sigof.post(url_filtro, data=payload_filtro)
-                                res_l = st.session_state.sesion_sigof.post(url_libros, data=payload_filtro)
-                                registro_consola.append(f"-> Memoria sincronizada: Ciclo {ciclo} / Sector {sector}")
-                            except Exception as e:
-                                registro_consola.append(f"-> Error sincronizando memoria: {e}")
-                            ultimo_ciclo = ciclo
-                            ultimo_sector = sector
-                            
-                        # PASO 2: EXTRAER LA RUTA (Con la misma estructura exacta que el navegador)
                         payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                         try:
-                            res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
+                            # Peticion limpia sin activar alarmas de seguridad
+                            res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
                             if "login" in res_leer.url:
                                 estado = "[ SESION CADUCADA ]"
+                                registro_consola.append(f"Fila {index+1}: Redireccion a Login.")
                             elif res_leer.status_code == 403:
                                 estado = "[ BLOQUEO SEGURIDAD ]"
-                                registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status 403: El servidor rechazo la peticion.")
+                                registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status 403. Bloqueo del servidor.")
                             else:
                                 try:
                                     datos = res_leer.json()
@@ -166,14 +156,14 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre."
                                     else:
-                                        estado = f"[ SIN DATOS ] La ruta esta vacia en este ciclo."
-                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status {res_leer.status_code} | aaData: []")
+                                        estado = f"[ COMBINACION INVALIDA ] No hay datos en este ciclo."
+                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | SIGOF respondio sin datos (aaData:[])")
                                 except Exception:
                                     estado = "[ ERROR LECTURA ]"
-                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta no es JSON: {res_leer.text[:100]}")
+                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta no esperada: {res_leer.text[:150]}")
                         except Exception as req_err:
                             estado = "[ ERROR DE RED ]"
-                            registro_consola.append(f"Fila {index+1}: Fallo de conexion -> {req_err}")
+                            registro_consola.append(f"Fila {index+1}: {str(req_err)}")
                     
                     reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
@@ -181,27 +171,23 @@ else:
                 st.subheader("Resultado del Analisis")
                 st.dataframe(pd.DataFrame(reporte_analisis), use_container_width=True)
                 
-                with st.expander("Consola de Registro Técnico (Detalles ocultos del sistema)"):
+                with st.expander("Consola de Registro Técnico (Detalles)"):
                     if registro_consola:
                         st.text_area("Log de Errores:", "\n\n".join(registro_consola), height=300)
                     else:
-                        st.write("Analisis limpio. Conexion 100% estable.")
+                        st.write("Analisis limpio. No hay errores.")
 
             if btn_asignar:
                 st.info("Iniciando asignacion masiva...")
-                st.session_state.sesion_sigof.get(url_modulo)
-                
                 barra_progreso = st.progress(0)
                 log_resultados = []
-                
-                ultimo_ciclo = None
-                ultimo_sector = None
+                registro_consola = []
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        log_resultados.append(f"Fila {index+1}: SALTADA. Faltan datos clave en el Excel.")
+                        log_resultados.append(f"Fila {index+1}: SALTADA. Faltan datos clave.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                         
@@ -210,28 +196,18 @@ else:
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    if ciclo != ultimo_ciclo or sector != ultimo_sector:
-                        payload_filtro = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
-                        try:
-                            st.session_state.sesion_sigof.post(url_filtro, data=payload_filtro)
-                            st.session_state.sesion_sigof.post(url_libros, data=payload_filtro)
-                        except:
-                            pass
-                        ultimo_ciclo = ciclo
-                        ultimo_sector = sector
-                    
                     payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                     
                     try:
-                        res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
+                        res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                         
                         if res_leer.status_code == 403:
-                            log_resultados.append(f"Ruta {ruta}: BLOQUEADA por el servidor (Status 403).")
+                            log_resultados.append(f"Ruta {ruta}: BLOQUEADA por seguridad (403).")
                             barra_progreso.progress((index + 1) / total_filas)
                             continue
                             
                         if "login" in res_leer.url:
-                            log_resultados.append(f"Ruta {ruta}: ERROR CRITICO. La sesion caduco, vuelve a ingresar.")
+                            log_resultados.append(f"Ruta {ruta}: ERROR CRITICO. La sesion caduco.")
                             break
                         
                         try:    
@@ -240,7 +216,7 @@ else:
                                 lecturista_actual = str(datos["aaData"][0][5]).strip()
                                 
                                 if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya esta asignada a {lecturista_actual}.")
+                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
                                 else:
                                     suministro_inicio = datos["aaData"][0][2]
                                     suministro_fin = datos["aaData"][-1][2]
@@ -255,16 +231,16 @@ else:
                                         "suministro_fin": suministro_fin
                                     }
                                     
-                                    res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
+                                    res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar, headers=headers_ajax)
                                     
                                     if res_guardar.status_code == 200:
                                         log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
                                     else:
-                                        log_resultados.append(f"Ruta {ruta}: ERROR. El servidor rechazo los datos (Status {res_guardar.status_code}).")
+                                        log_resultados.append(f"Ruta {ruta}: ERROR. Rechazada al guardar.")
                             else:
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. El servidor devolvio una lista vacia para este ciclo.")
+                                log_resultados.append(f"Ruta {ruta}: IGNORADA. No hay datos en este ciclo.")
                         except Exception:
-                            log_resultados.append(f"Ruta {ruta}: ERROR DE FORMATO en la respuesta del servidor.")
+                            log_resultados.append(f"Ruta {ruta}: ERROR DE FORMATO.")
                             
                     except Exception:
                         log_resultados.append(f"Ruta {ruta}: ERROR DE RED. Fallo la conexion.")
