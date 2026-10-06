@@ -3,11 +3,15 @@ import requests
 import pandas as pd
 import io
 
-# Configuracion basica
-st.set_page_config(page_title="Herramientas SIGOF", layout="centered")
+st.set_page_config(page_title="Herramientas SIGOF", layout="wide")
 
 if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
+    # Camuflaje basico para que el servidor nos trate como un navegador real
+    st.session_state.sesion_sigof.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "es-ES,es;q=0.9"
+    })
 
 if 'autenticado' not in st.session_state:
     st.session_state.autenticado = False
@@ -27,12 +31,10 @@ def iniciar_sesion(usuario, clave):
         st.error(f"Error de conexion: {e}")
         return False
 
-# Funcion para leer el Excel sin alterar los numeros
 def limpiar_dato(valor):
     if pd.isna(valor): 
         return ""
     v = str(valor).strip()
-    # Si Pandas le pone un ".0" al final de un numero entero, se lo quitamos
     return v[:-2] if v.endswith(".0") else v
 
 st.title("Sistema de Automatizacion")
@@ -63,7 +65,6 @@ else:
     st.divider()
     
     st.subheader("Modulo: Asignacion Masiva de Rutas")
-    st.write("Recuerda: En la columna 'Ciclo' debes poner el codigo interno de SIGOF (ej. 6157), no la fecha.")
     
     columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'ID']
     df_plantilla = pd.DataFrame(columns=columnas_requeridas)
@@ -75,7 +76,7 @@ else:
     st.download_button(
         label="Descargar Plantilla Excel",
         data=buffer.getvalue(),
-        file_name="Plantilla_Asignacion.xlsx",
+        file_name="Plantilla_Asignacion_Rutas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
@@ -84,51 +85,74 @@ else:
     if archivo_excel is not None:
         df = pd.read_excel(archivo_excel)
         columnas_excel = [str(col).strip().upper() for col in df.columns]
-        columnas_req_upper = [col.upper() for col in columnas_requeridas]
         
-        if all(col in columnas_excel for col in columnas_req_upper):
+        has_ciclo = any("CICLO" in col for col in columnas_excel)
+        has_sector = "SECTOR" in columnas_excel
+        has_ruta = "RUTA REP." in columnas_excel
+        has_id = "ID" in columnas_excel
+        
+        if has_ciclo and has_sector and has_ruta and has_id:
             col1, col2 = st.columns(2)
             btn_analizar = col1.button("Analizar Estado de Rutas")
             btn_asignar = col2.button("Iniciar Asignacion Masiva")
             
             url_leer = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listacreatelibro2"
             url_guardar = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_guardarlecturistalibro"
+            
+            # Cabecera clave para que SIGOF nos responda los JSON correctamente
+            headers_ajax = {"X-Requested-With": "XMLHttpRequest"}
+            
             total_filas = len(df)
             
+            def extraer_datos_fila(fila):
+                c, s, r, i = "", "", "", ""
+                for col_name in df.columns:
+                    col_upper = str(col_name).strip().upper()
+                    val = limpiar_dato(fila[col_name])
+                    if "CICLO" in col_upper: c = val
+                    elif col_upper == "SECTOR": s = val
+                    elif col_upper == "RUTA REP.": r = val
+                    elif col_upper == "ID": i = val
+                return c, s, r, i
+
             # --- FASE DE ANALISIS ---
             if btn_analizar:
-                st.info("Revisando como estan las rutas en el sistema...")
+                st.info("Revisando el estado real de las rutas en el sistema...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 
                 for index, fila in df.iterrows():
-                    ciclo = limpiar_dato(fila['Ciclo'])
-                    sector = limpiar_dato(fila['SECTOR'])
-                    ruta = limpiar_dato(fila['RUTA REP.'])
-                    id_lec = limpiar_dato(fila['ID'])
+                    ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        estado = "[ FALTAN DATOS ] Revisa que tu Excel tenga el Ciclo, Sector y Ruta escritos."
-                    elif not id_lec:
-                        estado = "[ SIN LECTURISTA ] Falta colocar el ID del trabajador en el Excel."
+                        estado = "[ FALTAN DATOS ] Revisa que tu Excel tenga el Ciclo, Sector y Ruta."
                     else:
-                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
-                        try:
-                            res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
-                            datos = res_leer.json()
-                            
-                            if "aaData" in datos and len(datos["aaData"]) > 0:
-                                lecturista_actual = str(datos["aaData"][0][5]).strip()
-                                if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                    estado = f"[ OCUPADA ] Ya esta asignada a: {lecturista_actual}."
-                                else:
-                                    estado = "[ LISTA ] Ruta libre y lista para asignar."
+                        datos_encontrados = None
+                        # Busca en todos los tipos posibles para no perder ninguna ruta
+                        for tipo_reparto in ["N", "R", "L", ""]:
+                            payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": tipo_reparto}
+                            try:
+                                res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
+                                datos = res_leer.json()
+                                if "aaData" in datos and len(datos["aaData"]) > 0:
+                                    datos_encontrados = datos
+                                    break
+                            except Exception:
+                                pass
+                        
+                        if datos_encontrados:
+                            lecturista_actual = str(datos_encontrados["aaData"][0][5]).strip()
+                            if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                estado = f"[ OCUPADA ] Ya esta asignada a: {lecturista_actual}."
                             else:
-                                estado = "[ NO EXISTE ] El sistema no encuentra esta ruta. Revisa el Ciclo, Sector y Ruta."
-                        except Exception:
-                            estado = "[ ERROR ] El servidor no respondio al consultar esta ruta."
+                                estado = "[ LISTA ] Ruta libre y lista para asignar."
+                        else:
+                            estado = f"[ NO EXISTE ] El sistema no encuentra esta ruta."
                     
-                    reporte_analisis.append({"Ruta": ruta, "Sector": sector, "ID": id_lec, "Diagnostico": estado})
+                    if not id_lec and "[ LISTA ]" in estado:
+                        estado = "[ SIN LECTURISTA ] Ruta lista, pero falta el ID en el Excel."
+                        
+                    reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
                 
                 st.subheader("Resultado del Analisis")
@@ -141,58 +165,60 @@ else:
                 log_resultados = []
                 
                 for index, fila in df.iterrows():
-                    ciclo = limpiar_dato(fila['Ciclo'])
-                    sector = limpiar_dato(fila['SECTOR'])
-                    ruta = limpiar_dato(fila['RUTA REP.'])
-                    id_lec = limpiar_dato(fila['ID'])
+                    ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        log_resultados.append(f"Fila {index+1}: SALTADA. Le falta Ciclo, Sector o Ruta.")
+                        log_resultados.append(f"Fila {index+1}: SALTADA. Falta Ciclo, Sector o Ruta.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                         
                     if not id_lec:
-                        log_resultados.append(f"Ruta {ruta}: SALTADA. No pusiste el ID del lecturista en el Excel.")
+                        log_resultados.append(f"Ruta {ruta}: SALTADA. No pusiste el ID del lecturista.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                    datos_encontrados = None
+                    for tipo_reparto in ["N", "R", "L", ""]:
+                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": tipo_reparto}
+                        try:
+                            res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
+                            datos = res_leer.json()
+                            if "aaData" in datos and len(datos["aaData"]) > 0:
+                                datos_encontrados = datos
+                                break
+                        except Exception:
+                            pass
                     
-                    try:
-                        res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
-                        datos = res_leer.json()
+                    if datos_encontrados:
+                        lecturista_actual = str(datos_encontrados["aaData"][0][5]).strip()
                         
-                        if "aaData" in datos and len(datos["aaData"]) > 0:
-                            lecturista_actual = str(datos["aaData"][0][5]).strip()
+                        if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                            log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya la tiene {lecturista_actual}.")
+                        else:
+                            suministro_inicio = datos_encontrados["aaData"][0][2]
+                            suministro_fin = datos_encontrados["aaData"][-1][2]
                             
-                            if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya la tiene {lecturista_actual}.")
-                            else:
-                                suministro_inicio = datos["aaData"][0][2]
-                                suministro_fin = datos["aaData"][-1][2]
-                                
-                                payload_guardar = {
-                                    "repartidor": id_lec,
-                                    "ciclo": ciclo,
-                                    "sector": sector,
-                                    "ruta": ruta,
-                                    "negocio": "82",
-                                    "suministro_inicio": suministro_inicio,
-                                    "suministro_fin": suministro_fin
-                                }
-                                
-                                res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
-                                
+                            payload_guardar = {
+                                "repartidor": id_lec,
+                                "ciclo": ciclo,
+                                "sector": sector,
+                                "ruta": ruta,
+                                "negocio": "82",
+                                "suministro_inicio": suministro_inicio,
+                                "suministro_fin": suministro_fin
+                            }
+                            
+                            try:
+                                res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar, headers=headers_ajax)
                                 if res_guardar.status_code == 200:
                                     log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
                                 else:
-                                    log_resultados.append(f"Ruta {ruta}: ERROR. El sistema rechazo los datos al guardar.")
-                        else:
-                            log_resultados.append(f"Ruta {ruta}: IGNORADA. No existe en el sistema.")
-                            
-                    except Exception:
-                        log_resultados.append(f"Ruta {ruta}: ERROR DE RED. Fallo la conexion con el servidor.")
-                    
+                                    log_resultados.append(f"Ruta {ruta}: ERROR. El sistema rechazo los datos.")
+                            except Exception:
+                                log_resultados.append(f"Ruta {ruta}: ERROR DE RED. Fallo la conexion al guardar.")
+                    else:
+                        log_resultados.append(f"Ruta {ruta}: IGNORADA. No existe en el sistema.")
+                        
                     barra_progreso.progress((index + 1) / total_filas)
                 
                 st.divider()
@@ -206,4 +232,4 @@ else:
                         st.warning(log)
                     
         else:
-            st.error(f"Tu Excel no tiene las columnas correctas. Descarga la plantilla y usala.")
+            st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'. Verifica los nombres.")
