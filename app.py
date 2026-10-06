@@ -65,10 +65,6 @@ else:
     
     st.subheader("Modulo: Asignacion Masiva de Rutas")
     
-    # NUEVA FUNCIONALIDAD: Sobrescribir Ciclo
-    st.info("Opcional: Si el ciclo en tu Excel es incorrecto, escribe aquí el ciclo activo en SIGOF. El sistema usará este número para todas las rutas.")
-    ciclo_global = st.text_input("Forzar Ciclo Global (ej. 6157)", help="Deja esto en blanco si prefieres usar la columna Ciclo de tu Excel.")
-    
     columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'ID']
     df_plantilla = pd.DataFrame(columns=columnas_requeridas)
     
@@ -99,13 +95,14 @@ else:
             btn_analizar = col1.button("Analizar Estado de Rutas")
             btn_asignar = col2.button("Iniciar Asignacion Masiva")
             
+            url_modulo_principal = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
             url_leer = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listacreatelibro2"
             url_guardar = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_guardarlecturistalibro"
             
             headers_ajax = {
                 "X-Requested-With": "XMLHttpRequest",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Referer": "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion",
+                "Referer": url_modulo_principal,
                 "Origin": "http://sigof.distriluz.com.pe"
             }
             
@@ -123,22 +120,23 @@ else:
                 return c, s, r, i
 
             if btn_analizar:
-                st.info("Revisando el estado real de las rutas en el sistema...")
+                st.info("Iniciando el modulo en memoria y analizando rutas...")
+                
+                # PASO CLAVE: Visitar la pagina principal para que SIGOF cargue "Huanuco" en la sesion
+                st.session_state.sesion_sigof.get(url_modulo_principal)
+                
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 registro_consola = []
                 
                 for index, fila in df.iterrows():
-                    ciclo_excel, sector, ruta, id_lec = extraer_datos_fila(fila)
+                    ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
-                    # Usa el ciclo de la caja de texto si existe, sino usa el del Excel
-                    ciclo_final = ciclo_global.strip() if ciclo_global.strip() != "" else ciclo_excel
-                    
-                    if not ciclo_final or not sector or not ruta:
+                    if not ciclo or not sector or not ruta:
                         estado = "[ RECHAZADO ] Faltan datos."
                         registro_consola.append(f"Fila {index+1}: Celdas vacias (Ciclo/Sector/Ruta).")
                     else:
-                        payload_leer = {"ciclo": ciclo_final, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
@@ -157,14 +155,14 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre y lista."
                                     else:
-                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene datos para esa ruta."
+                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene datos para esta ruta."
                                         registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Enviado: {payload_leer} | Respuesta: {res_leer.text}")
                                 except Exception:
                                     estado = "[ ERROR DE FORMATO ]"
                         except Exception as req_err:
                             estado = "[ ERROR SERVIDOR ] Fallo la conexion."
                     
-                    reporte_analisis.append({"Ciclo Usado": ciclo_final, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
+                    reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
                 
                 st.subheader("Resultado del Analisis")
@@ -177,16 +175,19 @@ else:
                         st.write("No hay errores que mostrar.")
 
             if btn_asignar:
-                st.info("Iniciando la asignacion real en el sistema...")
+                st.info("Iniciando el modulo en memoria y asignando rutas...")
+                
+                # PASO CLAVE: Visitar la pagina principal para que SIGOF cargue "Huanuco" en la sesion
+                st.session_state.sesion_sigof.get(url_modulo_principal)
+                
                 barra_progreso = st.progress(0)
                 log_resultados = []
                 registro_consola = []
                 
                 for index, fila in df.iterrows():
-                    ciclo_excel, sector, ruta, id_lec = extraer_datos_fila(fila)
-                    ciclo_final = ciclo_global.strip() if ciclo_global.strip() != "" else ciclo_excel
+                    ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
-                    if not ciclo_final or not sector or not ruta:
+                    if not ciclo or not sector or not ruta:
                         log_resultados.append(f"Fila {index+1}: SALTADA. Falta Ciclo, Sector o Ruta.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
@@ -196,7 +197,7 @@ else:
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    payload_leer = {"ciclo": ciclo_final, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                     
                     try:
                         res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
@@ -218,7 +219,7 @@ else:
                                     
                                     payload_guardar = {
                                         "repartidor": id_lec,
-                                        "ciclo": ciclo_final,
+                                        "ciclo": ciclo,
                                         "sector": sector,
                                         "ruta": ruta,
                                         "negocio": "82",
