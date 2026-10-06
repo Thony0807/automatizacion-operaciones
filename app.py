@@ -124,7 +124,7 @@ else:
 
             if btn_analizar:
                 st.info("Sincronizando memoria de SIGOF y analizando rutas...")
-                st.session_state.sesion_sigof.get(url_modulo) # Entrar al modulo
+                st.session_state.sesion_sigof.get(url_modulo)
                 
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
@@ -138,8 +138,8 @@ else:
                     
                     if not ciclo or not sector or not ruta:
                         estado = "[ RECHAZADO ] Faltan datos."
+                        registro_consola.append(f"Fila {index+1}: Celdas vacias.")
                     else:
-                        # PASO CLAVE: Si cambiamos de ciclo o sector, le avisamos a SIGOF antes de pedir la ruta
                         if ciclo != ultimo_ciclo or sector != ultimo_sector:
                             payload_filtro = {"ciclo": ciclo, "sector": sector, "negocio": "82", "id_tipo_reparto": "N"}
                             try:
@@ -150,13 +150,14 @@ else:
                             ultimo_ciclo = ciclo
                             ultimo_sector = sector
                             
-                        # Ahora si pedimos la ruta
-                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N", "negocio": "82"}
+                        # El payload ahora es exactamente identico al original, sin variables extrañas.
+                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
                             if "login" in res_leer.url:
                                 estado = "[ SESION CADUCADA ]"
+                                registro_consola.append(f"Fila {index+1}: Redireccion a Login.")
                             else:
                                 try:
                                     datos = res_leer.json()
@@ -169,12 +170,15 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre y lista."
                                     else:
-                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no devolvio datos."
-                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Resp: {res_leer.text}")
-                                except Exception:
+                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no encontro la ruta."
+                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | SIGOF devolvio vacio (aaData: [])")
+                                except Exception as e:
                                     estado = "[ ERROR DE FORMATO ]"
-                        except Exception:
+                                    # Se forza a la consola a imprimir el error oculto en texto crudo
+                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Error JSON | Status: {res_leer.status_code} | Respuesta: {res_leer.text[:200]}")
+                        except Exception as req_err:
                             estado = "[ ERROR SERVIDOR ] Fallo la conexion."
+                            registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Error Red: {str(req_err)}")
                     
                     reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
@@ -182,11 +186,11 @@ else:
                 st.subheader("Resultado del Analisis")
                 st.dataframe(pd.DataFrame(reporte_analisis), use_container_width=True)
                 
-                with st.expander("Consola de Registro Técnico"):
+                with st.expander("Consola de Registro Técnico (Detalles de los errores)"):
                     if registro_consola:
                         st.text_area("Log de Errores:", "\n\n".join(registro_consola), height=300)
                     else:
-                        st.write("Analisis limpio. No hay errores.")
+                        st.write("Analisis limpio. No hay errores de formato o conexion.")
 
             if btn_asignar:
                 st.info("Sincronizando memoria de SIGOF e iniciando asignacion real...")
@@ -194,6 +198,7 @@ else:
                 
                 barra_progreso = st.progress(0)
                 log_resultados = []
+                registro_consola = []
                 
                 ultimo_ciclo = None
                 ultimo_sector = None
@@ -211,7 +216,6 @@ else:
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    # WARM-UP (Rompehielos) de Sesion
                     if ciclo != ultimo_ciclo or sector != ultimo_sector:
                         payload_filtro = {"ciclo": ciclo, "sector": sector, "negocio": "82", "id_tipo_reparto": "N"}
                         try:
@@ -222,7 +226,7 @@ else:
                         ultimo_ciclo = ciclo
                         ultimo_sector = sector
                     
-                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N", "negocio": "82"}
+                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                     
                     try:
                         res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
@@ -277,6 +281,6 @@ else:
                         st.error(log)
                     else:
                         st.warning(log)
-                    
+                        
         else:
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
