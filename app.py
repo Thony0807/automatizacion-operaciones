@@ -9,7 +9,9 @@ if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
     st.session_state.sesion_sigof.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest"
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "http://sigof.distriluz.com.pe",
+        "Referer": "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
     })
 
 if 'autenticado' not in st.session_state:
@@ -19,13 +21,18 @@ def iniciar_sesion(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
     try:
-        respuesta = st.session_state.sesion_sigof.post(url_login, data=payload)
-        if "dashboard/modulos" in respuesta.url or respuesta.status_code == 200:
-            if "Módulo de Lectura" in respuesta.text or "Módulo de Entrega" in respuesta.text:
-                 # Asentar la cookie base en la página inicial
+        # 1. Petición de login
+        respuesta_login = st.session_state.sesion_sigof.post(url_login, data=payload)
+        
+        # 2. Verificación de redirección y carga de módulo inicial
+        if "dashboard/modulos" in respuesta_login.url or respuesta_login.status_code == 200:
+            if "Módulo de Lectura" in respuesta_login.text or "Módulo de Entrega" in respuesta_login.text:
+                 # 3. Inicialización crucial: Visitar la página del módulo para establecer el contexto de la sesión
                  st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                  return True
-            elif "dashboard/modulos" in respuesta.url:
+            elif "dashboard/modulos" in respuesta_login.url:
+                 # 3. Inicialización crucial: Visitar la página del módulo para establecer el contexto de la sesión
+                 st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                  return True
         return False
     except Exception as e:
@@ -130,14 +137,14 @@ else:
                         estado = "[ RECHAZADO ] Faltan datos clave."
                     else:
                         try:
-                            # 1. Petición obligatoria previa para que SIGOF prepare los datos en memoria
+                            # 1. Sincronización del contexto del servidor antes de cada consulta
                             if ciclo != ultimo_ciclo or sector != ultimo_sector:
                                 payload_previa = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
                                 st.session_state.sesion_sigof.post(url_listar, data=payload_previa)
                                 ultimo_ciclo = ciclo
                                 ultimo_sector = sector
                             
-                            # 2. Petición principal para extraer la tabla de la ruta
+                            # 2. Petición para recuperar datos de la ruta
                             payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
                             
@@ -145,18 +152,22 @@ else:
                                 estado = "[ SESION CADUCADA ]"
                                 break
                             else:
-                                datos = res_leer.json()
-                                if "aaData" in datos and len(datos["aaData"]) > 0:
-                                    lecturista_actual = str(datos["aaData"][0][5]).strip()
-                                    if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                        estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
-                                    elif not id_lec:
-                                        estado = "[ FALTA LECTURISTA ]"
+                                try:
+                                    datos = res_leer.json()
+                                    if "aaData" in datos and len(datos["aaData"]) > 0:
+                                        lecturista_actual = str(datos["aaData"][0][5]).strip()
+                                        if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                            estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
+                                        elif not id_lec:
+                                            estado = "[ FALTA LECTURISTA ]"
+                                        else:
+                                            estado = "[ LISTA ] Ruta libre."
                                     else:
-                                        estado = "[ LISTA ] Ruta libre."
-                                else:
-                                    estado = f"[ COMBINACION INVALIDA ] Ruta sin items en este ciclo."
-                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Payload enviado: {payload_leer}")
+                                        estado = f"[ COMBINACION INVALIDA ] Ruta sin items en este ciclo."
+                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta de SIGOF: {res_leer.text}")
+                                except Exception as json_err:
+                                     estado = "[ ERROR LECTURA JSON ]"
+                                     registro_consola.append(f"Fila {index+1} (Ruta {ruta}): {json_err} | Respuesta de SIGOF: {res_leer.text}")
                         except Exception as e:
                             estado = "[ ERROR ] Fallo la peticion."
                             registro_consola.append(f"Fila {index+1} (Ruta {ruta}): {str(e)}")
@@ -190,7 +201,7 @@ else:
                         continue
                     
                     try:
-                        # 1. Preparar memoria
+                        # 1. Sincronización del contexto del servidor antes de cada consulta
                         if ciclo != ultimo_ciclo or sector != ultimo_sector:
                             payload_previa = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
                             st.session_state.sesion_sigof.post(url_listar, data=payload_previa)
@@ -205,34 +216,37 @@ else:
                             log_resultados.append(f"Ruta {ruta}: ERROR CRITICO. La sesion caduco.")
                             break
                         
-                        datos = res_leer.json()
-                        if "aaData" in datos and len(datos["aaData"]) > 0:
-                            lecturista_actual = str(datos["aaData"][0][5]).strip()
-                            
-                            if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
-                            else:
-                                suministro_inicio = datos["aaData"][0][2]
-                                suministro_fin = datos["aaData"][-1][2]
+                        try:
+                            datos = res_leer.json()
+                            if "aaData" in datos and len(datos["aaData"]) > 0:
+                                lecturista_actual = str(datos["aaData"][0][5]).strip()
                                 
-                                payload_guardar = {
-                                    "repartidor": id_lec,
-                                    "ciclo": ciclo,
-                                    "sector": sector,
-                                    "ruta": ruta,
-                                    "negocio": "82",
-                                    "suministro_inicio": suministro_inicio,
-                                    "suministro_fin": suministro_fin
-                                }
-                                
-                                res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
-                                
-                                if res_guardar.status_code == 200:
-                                    log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
+                                if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
                                 else:
-                                    log_resultados.append(f"Ruta {ruta}: ERROR. Rechazada al guardar.")
-                        else:
-                            log_resultados.append(f"Ruta {ruta}: IGNORADA. Sin datos en este ciclo.")
+                                    suministro_inicio = datos["aaData"][0][2]
+                                    suministro_fin = datos["aaData"][-1][2]
+                                    
+                                    payload_guardar = {
+                                        "repartidor": id_lec,
+                                        "ciclo": ciclo,
+                                        "sector": sector,
+                                        "ruta": ruta,
+                                        "negocio": "82",
+                                        "suministro_inicio": suministro_inicio,
+                                        "suministro_fin": suministro_fin
+                                    }
+                                    
+                                    res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
+                                    
+                                    if res_guardar.status_code == 200:
+                                        log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
+                                    else:
+                                        log_resultados.append(f"Ruta {ruta}: ERROR. Rechazada al guardar.")
+                            else:
+                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Sin datos en este ciclo.")
+                        except Exception:
+                            log_resultados.append(f"Ruta {ruta}: ERROR DE LECTURA JSON.")
                     except Exception:
                         log_resultados.append(f"Ruta {ruta}: ERROR DE RED.")
                         
