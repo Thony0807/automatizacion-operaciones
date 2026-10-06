@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+import io
 
 # Configuración básica de la pestaña del navegador
 st.set_page_config(page_title="Herramientas SIGOF", layout="centered")
@@ -67,13 +68,29 @@ else:
     
     # --- MÓDULO DE ASIGNACIÓN MASIVA ---
     st.subheader("Módulo: Asignación Masiva de Rutas")
+    
+    st.write("Para evitar errores en el procesamiento, utiliza la estructura oficial del sistema.")
+    
+    # Crear la plantilla en memoria
+    columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'NOMBRE COMPLETO', 'ID']
+    df_plantilla = pd.DataFrame(columns=columnas_requeridas)
+    
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_plantilla.to_excel(writer, index=False, sheet_name='Cronograma')
+    
+    st.download_button(
+        label="Descargar Plantilla Excel",
+        data=buffer.getvalue(),
+        file_name="Plantilla_Asignacion_Rutas.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-    archivo_excel = st.file_uploader("Sube el cronograma en formato Excel (.xlsx)", type=["xlsx"])
+    st.write("Una vez llenada la plantilla, súbela a continuación:")
+    archivo_excel = st.file_uploader("Sube el cronograma (.xlsx)", type=["xlsx"])
 
     if archivo_excel is not None:
         df = pd.read_excel(archivo_excel)
-        
-        columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'NOMBRE COMPLETO', 'ID']
         
         # Validar que existan todas las columnas
         columnas_excel = [str(col).strip().upper() for col in df.columns]
@@ -150,7 +167,7 @@ else:
                                 res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
                                 
                                 if res_guardar.status_code == 200:
-                                    log_resultados.append(f"[ÉXITO] Ruta {ruta} asignada correctamente a ID {id_lecturista} ({nombre})")
+                                    log_resultados.append(f"[EXITO] Ruta {ruta} asignada correctamente a ID {id_lecturista} ({nombre})")
                                 else:
                                     log_resultados.append(f"[ERROR] Fallo al guardar Ruta {ruta} en el servidor (Status: {res_guardar.status_code}).")
                         else:
@@ -166,7 +183,7 @@ else:
                 st.divider()
                 st.subheader("Reporte de Asignación")
                 for log in log_resultados:
-                    if "[ÉXITO]" in log:
+                    if "[EXITO]" in log:
                         st.success(log)
                     elif "[ERROR]" in log:
                         st.error(log)
