@@ -9,7 +9,8 @@ if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
     st.session_state.sesion_sigof.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "es-ES,es;q=0.9"
+        "Accept-Language": "es-ES,es;q=0.9",
+        "Accept": "application/json, text/javascript, */*; q=0.01"
     })
 
 if 'autenticado' not in st.session_state:
@@ -95,14 +96,16 @@ else:
             btn_analizar = col1.button("Analizar Estado de Rutas")
             btn_asignar = col2.button("Iniciar Asignacion Masiva")
             
-            url_modulo_principal = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
+            url_modulo = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
+            url_filtro = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listar_ordenes_pendientes_asignacion"
+            url_libros = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listarLibros"
             url_leer = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listacreatelibro2"
             url_guardar = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_guardarlecturistalibro"
             
             headers_ajax = {
                 "X-Requested-With": "XMLHttpRequest",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Referer": url_modulo_principal,
+                "Referer": url_modulo,
                 "Origin": "http://sigof.distriluz.com.pe"
             }
             
@@ -120,29 +123,40 @@ else:
                 return c, s, r, i
 
             if btn_analizar:
-                st.info("Iniciando el modulo en memoria y analizando rutas...")
-                
-                # PASO CLAVE: Visitar la pagina principal para que SIGOF cargue "Huanuco" en la sesion
-                st.session_state.sesion_sigof.get(url_modulo_principal)
+                st.info("Sincronizando memoria de SIGOF y analizando rutas...")
+                st.session_state.sesion_sigof.get(url_modulo) # Entrar al modulo
                 
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 registro_consola = []
+                
+                ultimo_ciclo = None
+                ultimo_sector = None
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
                         estado = "[ RECHAZADO ] Faltan datos."
-                        registro_consola.append(f"Fila {index+1}: Celdas vacias (Ciclo/Sector/Ruta).")
                     else:
-                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                        # PASO CLAVE: Si cambiamos de ciclo o sector, le avisamos a SIGOF antes de pedir la ruta
+                        if ciclo != ultimo_ciclo or sector != ultimo_sector:
+                            payload_filtro = {"ciclo": ciclo, "sector": sector, "negocio": "82", "id_tipo_reparto": "N"}
+                            try:
+                                st.session_state.sesion_sigof.post(url_filtro, data=payload_filtro, headers=headers_ajax)
+                                st.session_state.sesion_sigof.post(url_libros, data=payload_filtro, headers=headers_ajax)
+                            except:
+                                pass
+                            ultimo_ciclo = ciclo
+                            ultimo_sector = sector
+                            
+                        # Ahora si pedimos la ruta
+                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N", "negocio": "82"}
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
                             if "login" in res_leer.url:
                                 estado = "[ SESION CADUCADA ]"
-                                registro_consola.append(f"Fila {index+1} (Ruta {ruta}): SIGOF redirecciono al Login.")
                             else:
                                 try:
                                     datos = res_leer.json()
@@ -155,11 +169,11 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre y lista."
                                     else:
-                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene datos para esta ruta."
-                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Enviado: {payload_leer} | Respuesta: {res_leer.text}")
+                                        estado = f"[ COMBINACION INVALIDA ] SIGOF no devolvio datos."
+                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Resp: {res_leer.text}")
                                 except Exception:
                                     estado = "[ ERROR DE FORMATO ]"
-                        except Exception as req_err:
+                        except Exception:
                             estado = "[ ERROR SERVIDOR ] Fallo la conexion."
                     
                     reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
@@ -168,36 +182,47 @@ else:
                 st.subheader("Resultado del Analisis")
                 st.dataframe(pd.DataFrame(reporte_analisis), use_container_width=True)
                 
-                with st.expander("Consola de Registro Técnico (Detalles de los errores)"):
+                with st.expander("Consola de Registro Técnico"):
                     if registro_consola:
-                        st.text_area("Log de Errores (Respuestas de SIGOF):", "\n\n".join(registro_consola), height=300)
+                        st.text_area("Log de Errores:", "\n\n".join(registro_consola), height=300)
                     else:
-                        st.write("No hay errores que mostrar.")
+                        st.write("Analisis limpio. No hay errores.")
 
             if btn_asignar:
-                st.info("Iniciando el modulo en memoria y asignando rutas...")
-                
-                # PASO CLAVE: Visitar la pagina principal para que SIGOF cargue "Huanuco" en la sesion
-                st.session_state.sesion_sigof.get(url_modulo_principal)
+                st.info("Sincronizando memoria de SIGOF e iniciando asignacion real...")
+                st.session_state.sesion_sigof.get(url_modulo)
                 
                 barra_progreso = st.progress(0)
                 log_resultados = []
-                registro_consola = []
+                
+                ultimo_ciclo = None
+                ultimo_sector = None
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        log_resultados.append(f"Fila {index+1}: SALTADA. Falta Ciclo, Sector o Ruta.")
+                        log_resultados.append(f"Fila {index+1}: SALTADA. Faltan datos clave.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                         
                     if not id_lec:
-                        log_resultados.append(f"Ruta {ruta}: SALTADA. Falta el ID del lecturista en el Excel.")
+                        log_resultados.append(f"Ruta {ruta}: SALTADA. Falta el ID del lecturista.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                    # WARM-UP (Rompehielos) de Sesion
+                    if ciclo != ultimo_ciclo or sector != ultimo_sector:
+                        payload_filtro = {"ciclo": ciclo, "sector": sector, "negocio": "82", "id_tipo_reparto": "N"}
+                        try:
+                            st.session_state.sesion_sigof.post(url_filtro, data=payload_filtro, headers=headers_ajax)
+                            st.session_state.sesion_sigof.post(url_libros, data=payload_filtro, headers=headers_ajax)
+                        except:
+                            pass
+                        ultimo_ciclo = ciclo
+                        ultimo_sector = sector
+                    
+                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N", "negocio": "82"}
                     
                     try:
                         res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
@@ -212,7 +237,7 @@ else:
                                 lecturista_actual = str(datos["aaData"][0][5]).strip()
                                 
                                 if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya esta asignada a {lecturista_actual}.")
+                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
                                 else:
                                     suministro_inicio = datos["aaData"][0][2]
                                     suministro_fin = datos["aaData"][-1][2]
@@ -234,7 +259,7 @@ else:
                                     else:
                                         log_resultados.append(f"Ruta {ruta}: ERROR. Rechazada al guardar.")
                             else:
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Combinacion invalida.")
+                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Combinacion invalida en el sistema.")
                         except Exception:
                             log_resultados.append(f"Ruta {ruta}: ERROR DE FORMATO.")
                             
