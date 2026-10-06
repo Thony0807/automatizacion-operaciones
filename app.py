@@ -65,13 +65,6 @@ else:
     
     st.subheader("Modulo: Asignacion Masiva de Rutas")
     
-    tipo_operacion = st.selectbox(
-        "Tipo de Operacion en SIGOF:", 
-        options=["N", "L", "R"], 
-        index=0, 
-        help="N = Reparto Normal, L = Lectura, R = Relectura"
-    )
-    
     columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'ID']
     df_plantilla = pd.DataFrame(columns=columnas_requeridas)
     
@@ -105,7 +98,6 @@ else:
             url_leer = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_listacreatelibro2"
             url_guardar = "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/ajax_guardarlecturistalibro"
             
-            # Cabeceras blindadas para simular un navegador real en la peticion AJAX
             headers_ajax = {
                 "X-Requested-With": "XMLHttpRequest",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -137,7 +129,8 @@ else:
                     if not ciclo or not sector or not ruta:
                         estado = "[ RECHAZADO ] Faltan datos. El Excel tiene celdas vacias en Ciclo, Sector o Ruta."
                     else:
-                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": tipo_operacion}
+                        # Se envía "N" por defecto al tratarse de Reparto
+                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
@@ -154,7 +147,7 @@ else:
                                     else:
                                         estado = "[ LISTA ] Ruta libre y lista para asignar."
                                 else:
-                                    estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene registros operativos para Ciclo {ciclo} + Sector {sector} + Ruta {ruta} bajo el tipo {tipo_operacion}."
+                                    estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene registros operativos para Ciclo {ciclo} + Sector {sector} + Ruta {ruta}."
                         except Exception:
                             estado = "[ ERROR SERVIDOR ] Fallo la comunicacion con SIGOF."
                     
@@ -182,7 +175,8 @@ else:
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": tipo_operacion}
+                    # Se envía "N" por defecto al tratarse de Reparto
+                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                     
                     try:
                         res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
