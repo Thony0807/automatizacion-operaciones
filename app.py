@@ -122,45 +122,61 @@ else:
                 st.info("Revisando el estado real de las rutas en el sistema...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
+                registro_consola = []
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     if not ciclo or not sector or not ruta:
-                        estado = "[ RECHAZADO ] Faltan datos. El Excel tiene celdas vacias en Ciclo, Sector o Ruta."
+                        estado = "[ RECHAZADO ] Faltan datos."
+                        registro_consola.append(f"Fila {index+1}: Celdas vacias en el Excel.")
                     else:
-                        # Se envía "N" por defecto al tratarse de Reparto
                         payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer, headers=headers_ajax)
                             
                             if "login" in res_leer.url:
-                                estado = "[ SESION CADUCADA ] SIGOF te desconecto. Vuelve a iniciar sesion."
+                                estado = "[ SESION CADUCADA ]"
+                                registro_consola.append(f"Fila {index+1} (Ruta {ruta}): SIGOF redirecciono al Login.")
                             else:
-                                datos = res_leer.json()
-                                if "aaData" in datos and len(datos["aaData"]) > 0:
-                                    lecturista_actual = str(datos["aaData"][0][5]).strip()
-                                    if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                        estado = f"[ OCUPADA ] La ruta ya esta asignada en SIGOF a: {lecturista_actual}."
-                                    elif not id_lec:
-                                        estado = "[ FALTA LECTURISTA ] La ruta esta libre, pero no pusiste un ID en el Excel."
+                                try:
+                                    datos = res_leer.json()
+                                    if "aaData" in datos and len(datos["aaData"]) > 0:
+                                        lecturista_actual = str(datos["aaData"][0][5]).strip()
+                                        if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                            estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
+                                        elif not id_lec:
+                                            estado = "[ FALTA LECTURISTA ]"
+                                        else:
+                                            estado = "[ LISTA ] Ruta libre y lista."
                                     else:
-                                        estado = "[ LISTA ] Ruta libre y lista para asignar."
-                                else:
-                                    estado = f"[ COMBINACION INVALIDA ] SIGOF no tiene registros operativos para Ciclo {ciclo} + Sector {sector} + Ruta {ruta}."
-                        except Exception:
-                            estado = "[ ERROR SERVIDOR ] Fallo la comunicacion con SIGOF."
+                                        estado = f"[ COMBINACION INVALIDA ] SIGOF devolvio datos vacios."
+                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status: {res_leer.status_code} | Enviado: {payload_leer} | Respuesta de SIGOF: {res_leer.text}")
+                                except Exception as json_err:
+                                    estado = "[ ERROR DE FORMATO ] El servidor no devolvio JSON."
+                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status: {res_leer.status_code} | Enviado: {payload_leer} | Respuesta cruda de SIGOF: {res_leer.text}")
+                        except Exception as req_err:
+                            estado = "[ ERROR SERVIDOR ] Fallo la conexion."
+                            registro_consola.append(f"Fila {index+1} (Ruta {ruta}): Error de red -> {req_err}")
                     
                     reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
                 
                 st.subheader("Resultado del Analisis")
                 st.dataframe(pd.DataFrame(reporte_analisis), use_container_width=True)
+                
+                # Desplegable de la consola de registro
+                with st.expander("Consola de Registro Técnico (Clic para ver detalles de los errores)"):
+                    if registro_consola:
+                        st.text_area("Log de Errores (Respuesta cruda del servidor):", "\n\n".join(registro_consola), height=300)
+                    else:
+                        st.write("No se detectaron errores de comunicación con el servidor.")
 
             if btn_asignar:
                 st.info("Iniciando la asignacion real en el sistema...")
                 barra_progreso = st.progress(0)
                 log_resultados = []
+                registro_consola = []
                 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
@@ -175,7 +191,6 @@ else:
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    # Se envía "N" por defecto al tratarse de Reparto
                     payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                     
                     try:
@@ -184,39 +199,45 @@ else:
                         if "login" in res_leer.url:
                             log_resultados.append(f"Ruta {ruta}: ERROR CRITICO. La sesion caduco, vuelve a ingresar.")
                             break
-                            
-                        datos = res_leer.json()
                         
-                        if "aaData" in datos and len(datos["aaData"]) > 0:
-                            lecturista_actual = str(datos["aaData"][0][5]).strip()
-                            
-                            if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya esta asignada a {lecturista_actual}.")
-                            else:
-                                suministro_inicio = datos["aaData"][0][2]
-                                suministro_fin = datos["aaData"][-1][2]
+                        try:    
+                            datos = res_leer.json()
+                            if "aaData" in datos and len(datos["aaData"]) > 0:
+                                lecturista_actual = str(datos["aaData"][0][5]).strip()
                                 
-                                payload_guardar = {
-                                    "repartidor": id_lec,
-                                    "ciclo": ciclo,
-                                    "sector": sector,
-                                    "ruta": ruta,
-                                    "negocio": "82",
-                                    "suministro_inicio": suministro_inicio,
-                                    "suministro_fin": suministro_fin
-                                }
-                                
-                                res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar, headers=headers_ajax)
-                                
-                                if res_guardar.status_code == 200:
-                                    log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
+                                if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya esta asignada a {lecturista_actual}.")
                                 else:
-                                    log_resultados.append(f"Ruta {ruta}: ERROR. El servidor rechazo el ID del lecturista.")
-                        else:
-                            log_resultados.append(f"Ruta {ruta}: IGNORADA. Combinacion Ciclo/Sector/Ruta invalida en el sistema.")
+                                    suministro_inicio = datos["aaData"][0][2]
+                                    suministro_fin = datos["aaData"][-1][2]
+                                    
+                                    payload_guardar = {
+                                        "repartidor": id_lec,
+                                        "ciclo": ciclo,
+                                        "sector": sector,
+                                        "ruta": ruta,
+                                        "negocio": "82",
+                                        "suministro_inicio": suministro_inicio,
+                                        "suministro_fin": suministro_fin
+                                    }
+                                    
+                                    res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar, headers=headers_ajax)
+                                    
+                                    if res_guardar.status_code == 200:
+                                        log_resultados.append(f"Ruta {ruta}: ASIGNADA con exito al ID {id_lec}.")
+                                    else:
+                                        log_resultados.append(f"Ruta {ruta}: ERROR. El servidor rechazo los datos (Status {res_guardar.status_code}).")
+                                        registro_consola.append(f"Asignacion Ruta {ruta} | Payload Guardar: {payload_guardar} | Respuesta: {res_guardar.text}")
+                            else:
+                                log_resultados.append(f"Ruta {ruta}: IGNORADA. Combinacion Ciclo/Sector/Ruta invalida en el sistema.")
+                                registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status: {res_leer.status_code} | Enviado: {payload_leer} | Respuesta de SIGOF: {res_leer.text}")
+                        except Exception as json_err:
+                            log_resultados.append(f"Ruta {ruta}: ERROR DE FORMATO.")
+                            registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta cruda de SIGOF: {res_leer.text}")
                             
-                    except Exception:
+                    except Exception as e:
                         log_resultados.append(f"Ruta {ruta}: ERROR DE RED. Fallo la conexion.")
+                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}): Error de red -> {e}")
                         
                     barra_progreso.progress((index + 1) / total_filas)
                 
@@ -229,6 +250,12 @@ else:
                         st.error(log)
                     else:
                         st.warning(log)
+                        
+                with st.expander("Consola de Registro Técnico (Detalles de errores de asignación)"):
+                    if registro_consola:
+                        st.text_area("Log de Errores (Respuesta cruda del servidor):", "\n\n".join(registro_consola), height=300)
+                    else:
+                        st.write("No se detectaron errores de comunicación con el servidor durante la asignación.")
                     
         else:
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
