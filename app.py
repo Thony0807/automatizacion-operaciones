@@ -21,17 +21,13 @@ def iniciar_sesion(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
     try:
-        # 1. Petición de login
         respuesta_login = st.session_state.sesion_sigof.post(url_login, data=payload)
         
-        # 2. Verificación de redirección y carga de módulo inicial
         if "dashboard/modulos" in respuesta_login.url or respuesta_login.status_code == 200:
             if "Módulo de Lectura" in respuesta_login.text or "Módulo de Entrega" in respuesta_login.text:
-                 # 3. Inicialización crucial: Visitar la página del módulo para establecer el contexto de la sesión
                  st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                  return True
             elif "dashboard/modulos" in respuesta_login.url:
-                 # 3. Inicialización crucial: Visitar la página del módulo para establecer el contexto de la sesión
                  st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                  return True
         return False
@@ -123,6 +119,10 @@ else:
 
             if btn_analizar:
                 st.info("Analizando rutas...")
+                
+                # Paso extra: Visitar el dashboard antes de empezar para refrescar la sesion
+                st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/dashboard/modulos")
+                
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 registro_consola = []
@@ -137,14 +137,14 @@ else:
                         estado = "[ RECHAZADO ] Faltan datos clave."
                     else:
                         try:
-                            # 1. Sincronización del contexto del servidor antes de cada consulta
+                            # 1. Sincronizacion de memoria
                             if ciclo != ultimo_ciclo or sector != ultimo_sector:
                                 payload_previa = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
                                 st.session_state.sesion_sigof.post(url_listar, data=payload_previa)
                                 ultimo_ciclo = ciclo
                                 ultimo_sector = sector
                             
-                            # 2. Petición para recuperar datos de la ruta
+                            # 2. Peticion para recuperar la tabla
                             payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
                             
@@ -152,22 +152,26 @@ else:
                                 estado = "[ SESION CADUCADA ]"
                                 break
                             else:
-                                try:
-                                    datos = res_leer.json()
-                                    if "aaData" in datos and len(datos["aaData"]) > 0:
-                                        lecturista_actual = str(datos["aaData"][0][5]).strip()
-                                        if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                            estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
-                                        elif not id_lec:
-                                            estado = "[ FALTA LECTURISTA ]"
+                                if not res_leer.text.strip():
+                                    estado = "[ RESPUESTA VACIA ]"
+                                    registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Status: {res_leer.status_code} | El servidor no envio ningun dato.")
+                                else:
+                                    try:
+                                        datos = res_leer.json()
+                                        if "aaData" in datos and len(datos["aaData"]) > 0:
+                                            lecturista_actual = str(datos["aaData"][0][5]).strip()
+                                            if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                                estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
+                                            elif not id_lec:
+                                                estado = "[ FALTA LECTURISTA ]"
+                                            else:
+                                                estado = "[ LISTA ] Ruta libre."
                                         else:
-                                            estado = "[ LISTA ] Ruta libre."
-                                    else:
-                                        estado = f"[ COMBINACION INVALIDA ] Ruta sin items en este ciclo."
-                                        registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta de SIGOF: {res_leer.text}")
-                                except Exception as json_err:
-                                     estado = "[ ERROR LECTURA JSON ]"
-                                     registro_consola.append(f"Fila {index+1} (Ruta {ruta}): {json_err} | Respuesta de SIGOF: {res_leer.text}")
+                                            estado = f"[ COMBINACION INVALIDA ] Ruta sin items en este ciclo."
+                                            registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | Respuesta JSON: {res_leer.text}")
+                                    except Exception as json_err:
+                                         estado = "[ ERROR LECTURA ]"
+                                         registro_consola.append(f"Fila {index+1} (Ruta {ruta}) | La respuesta no es JSON válido. Contenido: {res_leer.text}")
                         except Exception as e:
                             estado = "[ ERROR ] Fallo la peticion."
                             registro_consola.append(f"Fila {index+1} (Ruta {ruta}): {str(e)}")
@@ -186,6 +190,10 @@ else:
 
             if btn_asignar:
                 st.info("Iniciando asignacion masiva...")
+                
+                # Paso extra: Visitar el dashboard antes de empezar para refrescar la sesion
+                st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/dashboard/modulos")
+                
                 barra_progreso = st.progress(0)
                 log_resultados = []
                 
@@ -201,7 +209,7 @@ else:
                         continue
                     
                     try:
-                        # 1. Sincronización del contexto del servidor antes de cada consulta
+                        # 1. Sincronizacion de memoria
                         if ciclo != ultimo_ciclo or sector != ultimo_sector:
                             payload_previa = {"ciclo": ciclo, "sector": sector, "id_tipo_reparto": "N"}
                             st.session_state.sesion_sigof.post(url_listar, data=payload_previa)
@@ -215,6 +223,10 @@ else:
                         if "login" in res_leer.url:
                             log_resultados.append(f"Ruta {ruta}: ERROR CRITICO. La sesion caduco.")
                             break
+                            
+                        if not res_leer.text.strip():
+                             log_resultados.append(f"Ruta {ruta}: ERROR. El servidor no envio datos.")
+                             continue
                         
                         try:
                             datos = res_leer.json()
@@ -246,7 +258,7 @@ else:
                             else:
                                 log_resultados.append(f"Ruta {ruta}: IGNORADA. Sin datos en este ciclo.")
                         except Exception:
-                            log_resultados.append(f"Ruta {ruta}: ERROR DE LECTURA JSON.")
+                            log_resultados.append(f"Ruta {ruta}: ERROR LECTURA JSON.")
                     except Exception:
                         log_resultados.append(f"Ruta {ruta}: ERROR DE RED.")
                         
