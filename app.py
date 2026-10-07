@@ -25,7 +25,6 @@ if 'log_consola' not in st.session_state:
 
 def consola(mensaje):
     hora = time.strftime("%H:%M:%S")
-    # Insertamos al inicio para que lo más reciente salga arriba
     st.session_state.log_consola.insert(0, f"[{hora}] {mensaje}")
 
 def iniciar_sesion(usuario, clave):
@@ -244,17 +243,19 @@ else:
                                         detalle_final = f"Ruta ya asignada a: {lecturista_actual}."
                                         consola(f"Ruta {ruta} ignorada (Ocupada por {lecturista_actual}).")
                                     else:
-                                        item_inicio = limpiar_html(datos["aaData"][0][0])
-                                        item_fin = limpiar_html(datos["aaData"][-1][0])
+                                        # Extraccion exacta de los numeros de suministro para el payload
+                                        suministro_inicio = limpiar_html(datos["aaData"][0][2])
+                                        suministro_fin = limpiar_html(datos["aaData"][-1][2])
                                         
+                                        # Payload estructurado exactamente como el HAR
                                         payload_guardar = {
-                                            "negocio": "82",
+                                            "repartidor": str(id_lec),
                                             "ciclo": str(ciclo),
                                             "sector": str(sector),
-                                            "rutas": str(ruta),
-                                            "desde": str(item_inicio),
-                                            "hasta": str(item_fin),
-                                            "lecturista": str(id_lec)
+                                            "ruta": str(ruta),
+                                            "negocio": "82",
+                                            "suministro_inicio": str(suministro_inicio),
+                                            "suministro_fin": str(suministro_fin)
                                         }
                                         
                                         consola(f"Enviando POST a guardar: {payload_guardar}")
@@ -263,11 +264,11 @@ else:
                                         if res_guardar.status_code == 200:
                                             estado_final = "ASIGNADO"
                                             detalle_final = f"Ruta asignada al ID {id_lec}."
-                                            consola(f"Ruta {ruta} guardada OK. Resp: {res_guardar.text[:100]}")
+                                            consola(f"Ruta {ruta} guardada OK.")
                                         else:
                                             estado_final = "ERROR DE GUARDADO"
                                             detalle_final = f"SIGOF rechazo la peticion. Codigo: {res_guardar.status_code}."
-                                            consola(f"ERROR 500 en ruta {ruta}. Respuesta del servidor: {res_guardar.text}")
+                                            consola(f"ERROR {res_guardar.status_code} en ruta {ruta}.")
                                 else:
                                     estado_final = "NO ASIGNADO"
                                     detalle_final = "La ruta esta VACIA (Sin recibos)."
@@ -275,7 +276,7 @@ else:
                             except ValueError:
                                 estado_final = "ERROR INTERNO"
                                 detalle_final = "Fallo en la lectura JSON desde SIGOF."
-                                consola(f"Ruta {ruta} devolvio texto no JSON: {res_leer.text[:200]}")
+                                consola(f"Ruta {ruta} devolvio texto no JSON.")
                         except Exception as e:
                             estado_final = "ERROR DE RED"
                             detalle_final = "Se perdio la conexion."
