@@ -8,7 +8,6 @@ st.set_page_config(page_title="Herramientas SIGOF", layout="wide")
 
 if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
-    # Conexión limpia y directa
     st.session_state.sesion_sigof.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "X-Requested-With": "XMLHttpRequest"
@@ -21,12 +20,18 @@ def iniciar_sesion(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
     try:
+        # 1. Cargar la página inicial para obtener las cookies
+        st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/dashboard/init")
+        
+        # 2. Iniciar Sesión
         respuesta = st.session_state.sesion_sigof.post(url_login, data=payload)
-        if "dashboard/modulos" in respuesta.url or respuesta.status_code == 200:
-            if "Módulo de Lectura" in respuesta.text or "Módulo de Entrega" in respuesta.text:
-                 return True
-            elif "dashboard/modulos" in respuesta.url:
-                 return True
+        
+        # 3. PASO CLAVE DESCUBIERTO EN EL HAR: Fijar la sesión en Huánuco (UUNN 82, Empresa 4)
+        url_cambiar_sesion = "http://sigof.distriluz.com.pe/plus/usuario/ajax_cambiar_sesion"
+        st.session_state.sesion_sigof.post(url_cambiar_sesion, data={'idempresa': '4', 'iduunn': '82'})
+        
+        if "dashboard" in respuesta.url or respuesta.status_code == 200:
+            return True
         return False
     except Exception as e:
         st.error(f"Error de red: {e}")
@@ -39,7 +44,7 @@ def limpiar_dato(valor):
     return v[:-2] if v.endswith(".0") else v
 
 def limpiar_html(raw_html):
-    # Elimina etiquetas HTML ocultas que SIGOF suele devolver (ej. <strong>)
+    # Elimina las etiquetas HTML ocultas que envuelve SIGOF para sacar solo los números
     cleanr = re.compile('<.*?>')
     return re.sub(cleanr, '', str(raw_html)).strip()
 
@@ -61,7 +66,7 @@ if not st.session_state.autenticado:
             st.warning("Por favor ingresa usuario y contraseña.")
 
 else:
-    st.success("Sesion iniciada. Conexion estable.")
+    st.success("Sesion iniciada. Conexion fijada en la sede Huánuco.")
     
     if st.button("Cerrar Sesion"):
         st.session_state.autenticado = False
@@ -118,7 +123,6 @@ else:
                     elif col_upper == "ID": i = val
                 return c, s, r, i
 
-            # Payload base simulando DataTables para evitar respuestas vacías de SIGOF
             def crear_payload_lectura(c, s, r):
                 return {
                     "ciclo": str(c), "sector": str(s), "ruta": str(r), "id_tipo_reparto": "N",
@@ -129,7 +133,7 @@ else:
                 }
 
             if btn_analizar:
-                st.info("Analizando rutas...")
+                st.info("Analizando rutas en Huánuco...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 
@@ -141,7 +145,6 @@ else:
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
-                    # Verificación exacta de datos faltantes según requerimiento
                     faltantes = []
                     if not ciclo: faltantes.append("Ciclo")
                     if not sector: faltantes.append("Sector")
@@ -170,7 +173,7 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre para asignar."
                                     else:
-                                        estado = "[ VACÍA ] No hay recibos para esta ruta en SIGOF."
+                                        estado = "[ VACÍA ] No hay recibos para esta ruta."
                                 except ValueError:
                                     estado = "[ ERROR INTERNO ] SIGOF devolvió datos ilegibles."
                         except Exception:
@@ -223,27 +226,17 @@ else:
                                 if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                     log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
                                 else:
-                                    # Extraemos items y suministros limpios de HTML
                                     item_inicio = limpiar_html(datos["aaData"][0][0])
                                     item_fin = limpiar_html(datos["aaData"][-1][0])
-                                    suministro_inicio = limpiar_html(datos["aaData"][0][2])
-                                    suministro_fin = limpiar_html(datos["aaData"][-1][2])
                                     
-                                    # Payload combinado para cubrir todas las variables del formulario de guardado
                                     payload_guardar = {
                                         "negocio": "82",
-                                        "ciclo": ciclo,
-                                        "sector": sector,
-                                        "rutas": ruta,
-                                        "ruta": ruta,
-                                        "repartidor": id_lec,
-                                        "lecturista": id_lec,
-                                        "desde": item_inicio,
-                                        "hasta": item_fin,
-                                        "txt_suministro_inicio": suministro_inicio,
-                                        "txt_suministro_fin": suministro_fin,
-                                        "suministro_inicio": suministro_inicio,
-                                        "suministro_fin": suministro_fin
+                                        "ciclo": str(ciclo),
+                                        "sector": str(sector),
+                                        "rutas": str(ruta),
+                                        "desde": str(item_inicio),
+                                        "hasta": str(item_fin),
+                                        "lecturista": str(id_lec)
                                     }
                                     
                                     res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
