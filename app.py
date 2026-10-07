@@ -20,13 +20,9 @@ def iniciar_sesion(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
     try:
-        # 1. Cargar la página inicial para obtener las cookies
         st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/dashboard/init")
-        
-        # 2. Iniciar Sesión
         respuesta = st.session_state.sesion_sigof.post(url_login, data=payload)
         
-        # 3. PASO CLAVE DESCUBIERTO EN EL HAR: Fijar la sesión en Huánuco (UUNN 82, Empresa 4)
         url_cambiar_sesion = "http://sigof.distriluz.com.pe/plus/usuario/ajax_cambiar_sesion"
         st.session_state.sesion_sigof.post(url_cambiar_sesion, data={'idempresa': '4', 'iduunn': '82'})
         
@@ -44,7 +40,6 @@ def limpiar_dato(valor):
     return v[:-2] if v.endswith(".0") else v
 
 def limpiar_html(raw_html):
-    # Elimina las etiquetas HTML ocultas que envuelve SIGOF para sacar solo los números
     cleanr = re.compile('<.*?>')
     return re.sub(cleanr, '', str(raw_html)).strip()
 
@@ -66,7 +61,7 @@ if not st.session_state.autenticado:
             st.warning("Por favor ingresa usuario y contraseña.")
 
 else:
-    st.success("Sesion iniciada. Conexion fijada en la sede Huánuco.")
+    st.success("[ OK ] Sesion iniciada. Conexion fijada en la sede Huanuco.")
     
     if st.button("Cerrar Sesion"):
         st.session_state.autenticado = False
@@ -80,13 +75,13 @@ else:
     columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'ID']
     df_plantilla = pd.DataFrame(columns=columnas_requeridas)
     
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+    buffer_plantilla = io.BytesIO()
+    with pd.ExcelWriter(buffer_plantilla, engine='openpyxl') as writer:
         df_plantilla.to_excel(writer, index=False, sheet_name='Cronograma')
     
     st.download_button(
         label="Descargar Plantilla Excel",
-        data=buffer.getvalue(),
+        data=buffer_plantilla.getvalue(),
         file_name="Plantilla_Asignacion_Rutas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -133,7 +128,7 @@ else:
                 }
 
             if btn_analizar:
-                st.info("Analizando rutas en Huánuco...")
+                st.info("Analizando rutas en SIGOF...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 
@@ -162,7 +157,7 @@ else:
                                 estado = "[ SESION CADUCADA ] Vuelve a ingresar."
                                 break
                             elif not res_leer.text.strip():
-                                estado = "[ SIN RESPUESTA ] Servidor vacío."
+                                estado = "[ SIN RESPUESTA ] Servidor vacio."
                             else:
                                 try:
                                     datos = res_leer.json()
@@ -173,11 +168,11 @@ else:
                                         else:
                                             estado = "[ LISTA ] Ruta libre para asignar."
                                     else:
-                                        estado = "[ VACÍA ] No hay recibos para esta ruta."
+                                        estado = "[ VACIA ] No hay recibos para esta ruta."
                                 except ValueError:
-                                    estado = "[ ERROR INTERNO ] SIGOF devolvió datos ilegibles."
+                                    estado = "[ ERROR INTERNO ] SIGOF devolvio datos ilegibles."
                         except Exception:
-                            estado = "[ ERROR DE RED ] Falló la conexión."
+                            estado = "[ ERROR DE RED ] Fallo la conexion."
                     
                     reporte_analisis.append({"Ciclo": ciclo, "Sector": sector, "Ruta": ruta, "ID Excel": id_lec, "Diagnostico": estado})
                     barra_progreso.progress((index + 1) / total_filas)
@@ -188,7 +183,7 @@ else:
             if btn_asignar:
                 st.info("Iniciando asignacion masiva...")
                 barra_progreso = st.progress(0)
-                log_resultados = []
+                reporte_asignacion = []
                 
                 try:
                     st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
@@ -197,6 +192,8 @@ else:
 
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
+                    estado_final = ""
+                    detalle_final = ""
                     
                     faltantes = []
                     if not ciclo: faltantes.append("Ciclo")
@@ -205,64 +202,90 @@ else:
                     if not id_lec: faltantes.append("ID Lecturista")
                     
                     if len(faltantes) > 0:
-                        log_resultados.append(f"Fila {index+1}: SALTADA. Falta: {', '.join(faltantes)}.")
-                        barra_progreso.progress((index + 1) / total_filas)
-                        continue
-                    
-                    payload_leer = crear_payload_lectura(ciclo, sector, ruta)
-                    
-                    try:
-                        res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
-                        
-                        if "login" in res_leer.url:
-                            log_resultados.append("ERROR CRÍTICO: Tu sesión caducó.")
-                            break
+                        estado_final = "NO ASIGNADO"
+                        detalle_final = f"Datos faltantes en Excel: {', '.join(faltantes)}."
+                    else:
+                        payload_leer = crear_payload_lectura(ciclo, sector, ruta)
                         
                         try:
-                            datos = res_leer.json()
-                            if "aaData" in datos and len(datos["aaData"]) > 0:
-                                lecturista_actual = limpiar_html(datos["aaData"][0][5])
-                                
-                                if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
-                                    log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
-                                else:
-                                    item_inicio = limpiar_html(datos["aaData"][0][0])
-                                    item_fin = limpiar_html(datos["aaData"][-1][0])
+                            res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
+                            
+                            if "login" in res_leer.url:
+                                estado_final = "ERROR CRITICO"
+                                detalle_final = "La sesion en SIGOF ha caducado."
+                                break
+                            
+                            try:
+                                datos = res_leer.json()
+                                if "aaData" in datos and len(datos["aaData"]) > 0:
+                                    lecturista_actual = limpiar_html(datos["aaData"][0][5])
                                     
-                                    payload_guardar = {
-                                        "negocio": "82",
-                                        "ciclo": str(ciclo),
-                                        "sector": str(sector),
-                                        "rutas": str(ruta),
-                                        "desde": str(item_inicio),
-                                        "hasta": str(item_fin),
-                                        "lecturista": str(id_lec)
-                                    }
-                                    
-                                    res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
-                                    
-                                    if res_guardar.status_code == 200:
-                                        log_resultados.append(f"Ruta {ruta}: ASIGNADA con éxito al ID {id_lec}.")
+                                    if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
+                                        estado_final = "IGNORADO"
+                                        detalle_final = f"Ruta ya se encontraba asignada a: {lecturista_actual}."
                                     else:
-                                        log_resultados.append(f"Ruta {ruta}: ERROR al intentar guardar en SIGOF.")
-                            else:
-                                log_resultados.append(f"Ruta {ruta}: IGNORADA. No existen recibos cargados.")
-                        except ValueError:
-                            log_resultados.append(f"Ruta {ruta}: ERROR INTERNO de SIGOF al leer la tabla.")
-                    except Exception:
-                        log_resultados.append(f"Ruta {ruta}: ERROR DE RED. Revisa tu conexión.")
-                        
+                                        item_inicio = limpiar_html(datos["aaData"][0][0])
+                                        item_fin = limpiar_html(datos["aaData"][-1][0])
+                                        suministro_inicio = limpiar_html(datos["aaData"][0][2])
+                                        suministro_fin = limpiar_html(datos["aaData"][-1][2])
+                                        
+                                        # Nombres exactos de las variables del formulario obtenidos del HAR
+                                        payload_guardar = {
+                                            "negocio": "82",
+                                            "ciclo": str(ciclo),
+                                            "sector": str(sector),
+                                            "rutas": str(ruta),
+                                            "desde": str(item_inicio),
+                                            "hasta": str(item_fin),
+                                            "lecturista": str(id_lec),
+                                            "txt_suministro_inicio": str(suministro_inicio),
+                                            "txt_suministro_fin": str(suministro_fin)
+                                        }
+                                        
+                                        res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
+                                        
+                                        if res_guardar.status_code == 200:
+                                            estado_final = "ASIGNADO"
+                                            detalle_final = f"Ruta guardada exitosamente para el ID {id_lec}."
+                                        else:
+                                            estado_final = "ERROR DE GUARDADO"
+                                            detalle_final = f"SIGOF rechazo la peticion. Codigo: {res_guardar.status_code}."
+                                else:
+                                    estado_final = "NO ASIGNADO"
+                                    detalle_final = "El servidor indica que la ruta esta VACIA (Sin recibos)."
+                            except ValueError:
+                                estado_final = "ERROR INTERNO"
+                                detalle_final = "Fallo en la lectura de datos JSON desde SIGOF."
+                        except Exception as e:
+                            estado_final = "ERROR DE RED"
+                            detalle_final = "Se perdio la conexion con el servidor."
+                            
+                    reporte_asignacion.append({
+                        "Ciclo": ciclo, 
+                        "Sector": sector, 
+                        "Ruta": ruta, 
+                        "ID Excel": id_lec, 
+                        "Estado Final": estado_final, 
+                        "Detalle": detalle_final
+                    })
                     barra_progreso.progress((index + 1) / total_filas)
                 
                 st.divider()
                 st.subheader("Resumen Final de Asignacion")
-                for log in log_resultados:
-                    if "ASIGNADA" in log:
-                        st.success(log)
-                    elif "ERROR" in log or "SALTADA" in log:
-                        st.error(log)
-                    else:
-                        st.warning(log)
+                
+                df_resultado = pd.DataFrame(reporte_asignacion)
+                st.dataframe(df_resultado, use_container_width=True)
+                
+                buffer_resultado = io.BytesIO()
+                with pd.ExcelWriter(buffer_resultado, engine='openpyxl') as writer:
+                    df_resultado.to_excel(writer, index=False, sheet_name='Resultados')
+                
+                st.download_button(
+                    label="Descargar Reporte Final en Excel",
+                    data=buffer_resultado.getvalue(),
+                    file_name="Reporte_Asignacion_SIGOF.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
                         
         else:
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
