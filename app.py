@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import io
 import re
+import time
 
 st.set_page_config(page_title="Herramientas SIGOF", layout="wide")
 
@@ -10,11 +11,22 @@ if 'sesion_sigof' not in st.session_state:
     st.session_state.sesion_sigof = requests.Session()
     st.session_state.sesion_sigof.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "X-Requested-With": "XMLHttpRequest"
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "http://sigof.distriluz.com.pe",
+        "Referer": "http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion"
     })
 
 if 'autenticado' not in st.session_state:
     st.session_state.autenticado = False
+
+if 'log_consola' not in st.session_state:
+    st.session_state.log_consola = []
+
+def consola(mensaje):
+    hora = time.strftime("%H:%M:%S")
+    # Insertamos al inicio para que lo más reciente salga arriba
+    st.session_state.log_consola.insert(0, f"[{hora}] {mensaje}")
 
 def iniciar_sesion(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
@@ -61,11 +73,12 @@ if not st.session_state.autenticado:
             st.warning("Por favor ingresa usuario y contraseña.")
 
 else:
-    st.success("[ OK ] Sesion iniciada. Conexion fijada en la sede Huanuco.")
+    st.success("Sesion iniciada. Conexion fijada en la sede Huanuco.")
     
     if st.button("Cerrar Sesion"):
         st.session_state.autenticado = False
         st.session_state.sesion_sigof.cookies.clear()
+        st.session_state.log_consola = []
         st.rerun()
         
     st.divider()
@@ -185,6 +198,7 @@ else:
                 st.info("Iniciando asignacion masiva...")
                 barra_progreso = st.progress(0)
                 reporte_asignacion = []
+                st.session_state.log_consola = []
                 
                 try:
                     st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
@@ -207,6 +221,7 @@ else:
                         detalle_final = f"Datos faltantes en Excel: {', '.join(faltantes)}."
                     else:
                         payload_leer = crear_payload_lectura(ciclo, sector, ruta)
+                        consola(f"Analizando ruta {ruta}...")
                         
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
@@ -214,6 +229,7 @@ else:
                             if "login" in res_leer.url:
                                 estado_final = "ERROR CRITICO"
                                 detalle_final = "La sesion en SIGOF ha caducado."
+                                consola("ERROR CRITICO: Redireccion a login (Sesion caducada).")
                                 reporte_asignacion.append({"Ciclo": ciclo, "SECTOR": sector, "RUTA REP.": ruta, "ID": id_lec, "Estado Final": estado_final, "Detalle": detalle_final})
                                 break
                             
@@ -225,7 +241,8 @@ else:
                                     
                                     if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                         estado_final = "IGNORADO"
-                                        detalle_final = f"Ruta ya se encontraba asignada a: {lecturista_actual}."
+                                        detalle_final = f"Ruta ya asignada a: {lecturista_actual}."
+                                        consola(f"Ruta {ruta} ignorada (Ocupada por {lecturista_actual}).")
                                     else:
                                         item_inicio = limpiar_html(datos["aaData"][0][0])
                                         item_fin = limpiar_html(datos["aaData"][-1][0])
@@ -240,23 +257,29 @@ else:
                                             "lecturista": str(id_lec)
                                         }
                                         
+                                        consola(f"Enviando POST a guardar: {payload_guardar}")
                                         res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
                                         
                                         if res_guardar.status_code == 200:
                                             estado_final = "ASIGNADO"
                                             detalle_final = f"Ruta asignada al ID {id_lec}."
+                                            consola(f"Ruta {ruta} guardada OK. Resp: {res_guardar.text[:100]}")
                                         else:
                                             estado_final = "ERROR DE GUARDADO"
                                             detalle_final = f"SIGOF rechazo la peticion. Codigo: {res_guardar.status_code}."
+                                            consola(f"ERROR 500 en ruta {ruta}. Respuesta del servidor: {res_guardar.text}")
                                 else:
                                     estado_final = "NO ASIGNADO"
-                                    detalle_final = "El servidor indica que la ruta esta VACIA (Sin recibos)."
+                                    detalle_final = "La ruta esta VACIA (Sin recibos)."
+                                    consola(f"Ruta {ruta} vacia, se omite.")
                             except ValueError:
                                 estado_final = "ERROR INTERNO"
-                                detalle_final = "Fallo en la lectura de datos JSON desde SIGOF."
+                                detalle_final = "Fallo en la lectura JSON desde SIGOF."
+                                consola(f"Ruta {ruta} devolvio texto no JSON: {res_leer.text[:200]}")
                         except Exception as e:
                             estado_final = "ERROR DE RED"
-                            detalle_final = "Se perdio la conexion con el servidor."
+                            detalle_final = "Se perdio la conexion."
+                            consola(f"Error de red en ruta {ruta}: {str(e)}")
                             
                     reporte_asignacion.append({
                         "Ciclo": ciclo, 
@@ -284,6 +307,13 @@ else:
                     file_name="Reporte_Asignacion_SIGOF.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+            st.divider()
+            st.subheader("Consola de Registros Detallados")
+            if st.session_state.log_consola:
+                st.text_area("Eventos de red y errores del servidor:", value="\n".join(st.session_state.log_consola), height=300)
+            else:
+                st.info("La consola esta esperando operaciones...")
                         
         else:
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
