@@ -33,15 +33,15 @@ def iniciar_sesion(usuario, clave):
         st.error(f"Error de red: {e}")
         return False
 
-def limpiar_dato(valor):
-    if pd.isna(valor): 
-        return ""
-    v = str(valor).strip()
-    return v[:-2] if v.endswith(".0") else v
+def extraer_numero(valor):
+    if pd.isna(valor): return ""
+    nums = re.findall(r'\d+', str(valor))
+    return nums[0] if nums else "0"
 
 def limpiar_html(raw_html):
     cleanr = re.compile('<.*?>')
-    return re.sub(cleanr, '', str(raw_html)).strip()
+    texto_limpio = re.sub(cleanr, '', str(raw_html)).strip()
+    return extraer_numero(texto_limpio)
 
 st.title("Sistema de Automatizacion Masiva")
 
@@ -111,7 +111,7 @@ else:
                 c, s, r, i = "", "", "", ""
                 for col_name in df.columns:
                     col_upper = str(col_name).strip().upper()
-                    val = limpiar_dato(fila[col_name])
+                    val = extraer_numero(fila[col_name])
                     if "CICLO" in col_upper: c = val
                     elif col_upper == "SECTOR": s = val
                     elif col_upper == "RUTA REP.": r = val
@@ -141,10 +141,10 @@ else:
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
                     faltantes = []
-                    if not ciclo: faltantes.append("Ciclo")
-                    if not sector: faltantes.append("Sector")
-                    if not ruta: faltantes.append("Ruta")
-                    if not id_lec: faltantes.append("ID Lecturista")
+                    if not ciclo or ciclo == "0": faltantes.append("Ciclo")
+                    if not sector or sector == "0": faltantes.append("Sector")
+                    if not ruta or ruta == "0": faltantes.append("Ruta")
+                    if not id_lec or id_lec == "0": faltantes.append("ID Lecturista")
                     
                     if len(faltantes) > 0:
                         estado = f"[ DATOS FALTANTES ] Falta en el Excel: {', '.join(faltantes)}."
@@ -162,7 +162,8 @@ else:
                                 try:
                                     datos = res_leer.json()
                                     if "aaData" in datos and len(datos["aaData"]) > 0:
-                                        lecturista_actual = limpiar_html(datos["aaData"][0][5])
+                                        cleanr = re.compile('<.*?>')
+                                        lecturista_actual = re.sub(cleanr, '', str(datos["aaData"][0][5])).strip()
                                         if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                             estado = f"[ OCUPADA ] Ya asignada a: {lecturista_actual}."
                                         else:
@@ -196,10 +197,10 @@ else:
                     detalle_final = ""
                     
                     faltantes = []
-                    if not ciclo: faltantes.append("Ciclo")
-                    if not sector: faltantes.append("Sector")
-                    if not ruta: faltantes.append("Ruta")
-                    if not id_lec: faltantes.append("ID Lecturista")
+                    if not ciclo or ciclo == "0": faltantes.append("Ciclo")
+                    if not sector or sector == "0": faltantes.append("Sector")
+                    if not ruta or ruta == "0": faltantes.append("Ruta")
+                    if not id_lec or id_lec == "0": faltantes.append("ID Lecturista")
                     
                     if len(faltantes) > 0:
                         estado_final = "NO ASIGNADO"
@@ -213,12 +214,14 @@ else:
                             if "login" in res_leer.url:
                                 estado_final = "ERROR CRITICO"
                                 detalle_final = "La sesion en SIGOF ha caducado."
+                                reporte_asignacion.append({"Ciclo": ciclo, "SECTOR": sector, "RUTA REP.": ruta, "ID": id_lec, "Estado Final": estado_final, "Detalle": detalle_final})
                                 break
                             
                             try:
                                 datos = res_leer.json()
                                 if "aaData" in datos and len(datos["aaData"]) > 0:
-                                    lecturista_actual = limpiar_html(datos["aaData"][0][5])
+                                    cleanr = re.compile('<.*?>')
+                                    lecturista_actual = re.sub(cleanr, '', str(datos["aaData"][0][5])).strip()
                                     
                                     if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                         estado_final = "IGNORADO"
@@ -226,10 +229,7 @@ else:
                                     else:
                                         item_inicio = limpiar_html(datos["aaData"][0][0])
                                         item_fin = limpiar_html(datos["aaData"][-1][0])
-                                        suministro_inicio = limpiar_html(datos["aaData"][0][2])
-                                        suministro_fin = limpiar_html(datos["aaData"][-1][2])
                                         
-                                        # Nombres exactos de las variables del formulario obtenidos del HAR
                                         payload_guardar = {
                                             "negocio": "82",
                                             "ciclo": str(ciclo),
@@ -237,16 +237,14 @@ else:
                                             "rutas": str(ruta),
                                             "desde": str(item_inicio),
                                             "hasta": str(item_fin),
-                                            "lecturista": str(id_lec),
-                                            "txt_suministro_inicio": str(suministro_inicio),
-                                            "txt_suministro_fin": str(suministro_fin)
+                                            "lecturista": str(id_lec)
                                         }
                                         
                                         res_guardar = st.session_state.sesion_sigof.post(url_guardar, data=payload_guardar)
                                         
                                         if res_guardar.status_code == 200:
                                             estado_final = "ASIGNADO"
-                                            detalle_final = f"Ruta guardada exitosamente para el ID {id_lec}."
+                                            detalle_final = f"Ruta asignada al ID {id_lec}."
                                         else:
                                             estado_final = "ERROR DE GUARDADO"
                                             detalle_final = f"SIGOF rechazo la peticion. Codigo: {res_guardar.status_code}."
@@ -262,9 +260,9 @@ else:
                             
                     reporte_asignacion.append({
                         "Ciclo": ciclo, 
-                        "Sector": sector, 
-                        "Ruta": ruta, 
-                        "ID Excel": id_lec, 
+                        "SECTOR": sector, 
+                        "RUTA REP.": ruta, 
+                        "ID": id_lec, 
                         "Estado Final": estado_final, 
                         "Detalle": detalle_final
                     })
