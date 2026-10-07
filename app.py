@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import io
+import re
 
 st.set_page_config(page_title="Herramientas SIGOF", layout="wide")
 
@@ -37,7 +38,12 @@ def limpiar_dato(valor):
     v = str(valor).strip()
     return v[:-2] if v.endswith(".0") else v
 
-st.title("Sistema de Automatizacion")
+def limpiar_html(raw_html):
+    # Elimina etiquetas HTML ocultas que SIGOF suele devolver (ej. <strong>)
+    cleanr = re.compile('<.*?>')
+    return re.sub(cleanr, '', str(raw_html)).strip()
+
+st.title("Sistema de Automatizacion Masiva")
 
 if not st.session_state.autenticado:
     st.subheader("Acceso a SIGOF")
@@ -55,7 +61,7 @@ if not st.session_state.autenticado:
             st.warning("Por favor ingresa usuario y contraseña.")
 
 else:
-    st.success("✅ Sesion iniciada. Conexion estable.")
+    st.success("Sesion iniciada. Conexion estable.")
     
     if st.button("Cerrar Sesion"):
         st.session_state.autenticado = False
@@ -112,12 +118,21 @@ else:
                     elif col_upper == "ID": i = val
                 return c, s, r, i
 
+            # Payload base simulando DataTables para evitar respuestas vacías de SIGOF
+            def crear_payload_lectura(c, s, r):
+                return {
+                    "ciclo": str(c), "sector": str(s), "ruta": str(r), "id_tipo_reparto": "N",
+                    "sEcho": "1", "iColumns": "8", "sColumns": "",
+                    "iDisplayStart": "0", "iDisplayLength": "5000",
+                    "mDataProp_0": "0", "mDataProp_1": "1", "mDataProp_2": "2", "mDataProp_3": "3",
+                    "mDataProp_4": "4", "mDataProp_5": "5", "mDataProp_6": "6", "mDataProp_7": "7"
+                }
+
             if btn_analizar:
                 st.info("Analizando rutas...")
                 barra_progreso = st.progress(0)
                 reporte_analisis = []
                 
-                # Visita silenciosa de preparación (una sola vez)
                 try:
                     st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
                 except:
@@ -126,36 +141,38 @@ else:
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
-                    if not ciclo or not sector or not ruta:
-                        estado = "[ RECHAZADO ] Datos incompletos."
+                    # Verificación exacta de datos faltantes según requerimiento
+                    faltantes = []
+                    if not ciclo: faltantes.append("Ciclo")
+                    if not sector: faltantes.append("Sector")
+                    if not ruta: faltantes.append("Ruta")
+                    if not id_lec: faltantes.append("ID Lecturista")
+                    
+                    if len(faltantes) > 0:
+                        estado = f"[ DATOS FALTANTES ] Falta en el Excel: {', '.join(faltantes)}."
                     else:
-                        payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                        payload_leer = crear_payload_lectura(ciclo, sector, ruta)
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
                             
                             if "login" in res_leer.url:
                                 estado = "[ SESION CADUCADA ] Vuelve a ingresar."
                                 break
-                            elif res_leer.status_code == 403:
-                                estado = "[ BLOQUEO SIGOF ] Error 403."
                             elif not res_leer.text.strip():
                                 estado = "[ SIN RESPUESTA ] Servidor vacío."
                             else:
-                                # Captura silenciosa de errores JSON (Evita el "Expecting value")
                                 try:
                                     datos = res_leer.json()
                                     if "aaData" in datos and len(datos["aaData"]) > 0:
-                                        lecturista_actual = str(datos["aaData"][0][5]).strip()
-                                        if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
-                                            estado = f"[ OCUPADA ] Asignada a: {lecturista_actual}."
-                                        elif not id_lec:
-                                            estado = "[ FALTA ID ] Excel no tiene ID."
+                                        lecturista_actual = limpiar_html(datos["aaData"][0][5])
+                                        if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
+                                            estado = f"[ OCUPADA ] Ya asignada a: {lecturista_actual}."
                                         else:
-                                            estado = "[ LISTA ] Ruta libre."
+                                            estado = "[ LISTA ] Ruta libre para asignar."
                                     else:
                                         estado = "[ VACÍA ] No hay recibos para esta ruta en SIGOF."
                                 except ValueError:
-                                    estado = "[ ERROR INTERNO SIGOF ] La página falló al cargar."
+                                    estado = "[ ERROR INTERNO ] SIGOF devolvió datos ilegibles."
                         except Exception:
                             estado = "[ ERROR DE RED ] Falló la conexión."
                     
@@ -178,12 +195,18 @@ else:
                 for index, fila in df.iterrows():
                     ciclo, sector, ruta, id_lec = extraer_datos_fila(fila)
                     
-                    if not ciclo or not sector or not ruta or not id_lec:
-                        log_resultados.append(f"Fila {index+1}: SALTADA por datos incompletos.")
+                    faltantes = []
+                    if not ciclo: faltantes.append("Ciclo")
+                    if not sector: faltantes.append("Sector")
+                    if not ruta: faltantes.append("Ruta")
+                    if not id_lec: faltantes.append("ID Lecturista")
+                    
+                    if len(faltantes) > 0:
+                        log_resultados.append(f"Fila {index+1}: SALTADA. Falta: {', '.join(faltantes)}.")
                         barra_progreso.progress((index + 1) / total_filas)
                         continue
                     
-                    payload_leer = {"ciclo": ciclo, "sector": sector, "ruta": ruta, "id_tipo_reparto": "N"}
+                    payload_leer = crear_payload_lectura(ciclo, sector, ruta)
                     
                     try:
                         res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
@@ -191,31 +214,34 @@ else:
                         if "login" in res_leer.url:
                             log_resultados.append("ERROR CRÍTICO: Tu sesión caducó.")
                             break
-                        elif res_leer.status_code == 403:
-                            log_resultados.append(f"Ruta {ruta}: BLOQUEADA por seguridad SIGOF.")
-                            barra_progreso.progress((index + 1) / total_filas)
-                            continue
-                        elif not res_leer.text.strip():
-                             log_resultados.append(f"Ruta {ruta}: ERROR. El servidor no respondió.")
-                             continue
                         
                         try:
                             datos = res_leer.json()
                             if "aaData" in datos and len(datos["aaData"]) > 0:
-                                lecturista_actual = str(datos["aaData"][0][5]).strip()
+                                lecturista_actual = limpiar_html(datos["aaData"][0][5])
                                 
-                                if lecturista_actual and lecturista_actual != "None" and lecturista_actual != "":
+                                if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                     log_resultados.append(f"Ruta {ruta}: IGNORADA. Ya asignada a {lecturista_actual}.")
                                 else:
-                                    suministro_inicio = datos["aaData"][0][2]
-                                    suministro_fin = datos["aaData"][-1][2]
+                                    # Extraemos items y suministros limpios de HTML
+                                    item_inicio = limpiar_html(datos["aaData"][0][0])
+                                    item_fin = limpiar_html(datos["aaData"][-1][0])
+                                    suministro_inicio = limpiar_html(datos["aaData"][0][2])
+                                    suministro_fin = limpiar_html(datos["aaData"][-1][2])
                                     
+                                    # Payload combinado para cubrir todas las variables del formulario de guardado
                                     payload_guardar = {
-                                        "repartidor": id_lec,
+                                        "negocio": "82",
                                         "ciclo": ciclo,
                                         "sector": sector,
+                                        "rutas": ruta,
                                         "ruta": ruta,
-                                        "negocio": "82",
+                                        "repartidor": id_lec,
+                                        "lecturista": id_lec,
+                                        "desde": item_inicio,
+                                        "hasta": item_fin,
+                                        "txt_suministro_inicio": suministro_inicio,
+                                        "txt_suministro_fin": suministro_fin,
                                         "suministro_inicio": suministro_inicio,
                                         "suministro_fin": suministro_fin
                                     }
@@ -240,7 +266,7 @@ else:
                 for log in log_resultados:
                     if "ASIGNADA" in log:
                         st.success(log)
-                    elif "ERROR" in log or "BLOQUEADA" in log:
+                    elif "ERROR" in log or "SALTADA" in log:
                         st.error(log)
                     else:
                         st.warning(log)
