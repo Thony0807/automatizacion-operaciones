@@ -4,6 +4,7 @@ import pandas as pd
 import io
 import re
 import time
+import json
 
 # ==========================================
 # CONFIGURACION GLOBAL Y VARIABLES DE SESION
@@ -27,22 +28,23 @@ if 'autenticado_sigof' not in st.session_state:
 # Sesion Field Service
 if 'sesion_field' not in st.session_state:
     st.session_state.sesion_field = requests.Session()
-    # Headers extraidos del archivo HAR proporcionado
+    # Headers exactos extraidos del cURL hacia la API de Field Service
     st.session_state.sesion_field.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "es-419,es;q=0.6",
-        "Connection": "keep-alive",
-        "Host": "servicios.distriluz.com.pe",
-        "Origin": "https://servicios.distriluz.com.pe",
-        "Referer": "https://servicios.distriluz.com.pe/FieldService/login",
+        "accept": "application/json",
+        "accept-language": "es-419,es;q=0.6",
+        "content-type": "application/json; charset=utf-8",
+        "origin": "https://servicios.distriluz.com.pe",
+        "priority": "u=1, i",
+        "referer": "https://servicios.distriluz.com.pe/",
         "sec-ch-ua": '"Brave";v="155", "Chromium";v="155", "Not(A:Brand";v="24"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Upgrade-Insecure-Requests": "1"
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "sec-gpc": "1",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+        "x-audit-application": "WEB"
     })
     
 if 'autenticado_field' not in st.session_state:
@@ -88,35 +90,31 @@ def iniciar_sesion_sigof(usuario, clave):
 
 # --- LOGIN FIELD SERVICE ---
 def iniciar_sesion_field(usuario, clave):
-    url_login = "https://servicios.distriluz.com.pe/FieldService/login"
+    # La API reside en el puerto 51000, separado de la interfaz frontend
+    url_api_login = "https://servicios.distriluz.com.pe:51000/OptimusNGC_FieldService/api/auth/login"
+    
+    # Preparamos el payload en formato JSON exacto como pide el servidor
+    payload = {
+        "usuario": str(usuario),
+        "clave": str(clave),
+        "tipo": 3
+    }
     
     try:
-        # 1. Visitar la pagina de login para obtener la cookie de sesion inicial y posibles tokens ocultos
-        res_get = st.session_state.sesion_field.get(url_login)
+        # Pre-vuelo OPTIONS (Opcional, pero ayuda a emular perfectamente al navegador en APIs con CORS)
+        st.session_state.sesion_field.options(url_api_login)
         
-        # Extraer token de verificacion si existe (muy comun en ASP.NET / Blazor)
-        token_match = re.search(r'<input name="__RequestVerificationToken" type="hidden" value="(.*?)" />', res_get.text)
-        token = token_match.group(1) if token_match else ""
+        # Envio de autenticacion POST
+        respuesta = st.session_state.sesion_field.post(
+            url_api_login, 
+            data=json.dumps(payload),
+            verify=False # Equivalente a --insecure en cURL
+        )
         
-        # 2. Construir el payload
-        payload = {
-            "Input.Email": usuario,     # Generalmente en .NET usan estos nombres genericos
-            "Input.Password": clave,
-            "Input.RememberMachine": "false"
-        }
-        if token:
-            payload["__RequestVerificationToken"] = token
-            
-        # 3. Enviar el POST. Permitimos redireccion porque un login exitoso devuelve un 302 hacia el dashboard
-        st.session_state.sesion_field.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
-        res_post = st.session_state.sesion_field.post(url_login, data=payload, allow_redirects=True)
-        
-        # 4. Validar redireccion al dashboard o exito
-        if "dashboard" in res_post.url.lower() or res_post.status_code == 200:
-            # Revertimos header a lo normal
-            st.session_state.sesion_field.headers.pop("Content-Type", None)
+        # El servidor devuelve 200 OK si las credenciales son validas
+        if respuesta.status_code == 200:
             return True
-        
+            
         return False
     except Exception as e:
         st.error(f"Error de red Field Service: {e}")
@@ -141,8 +139,8 @@ def modulo_asignacion_masiva_sigof():
         with col_c:
             cla_sigof = st.text_input("Contrasena SIGOF", type="password", key="login_cla_sigof")
         with col_b:
-            st.write("") # Espaciado
-            st.write("") # Espaciado
+            st.write("") 
+            st.write("") 
             if st.button("Ingresar a SIGOF", use_container_width=True):
                 if usu_sigof and cla_sigof:
                     if iniciar_sesion_sigof(usu_sigof, cla_sigof):
@@ -152,7 +150,7 @@ def modulo_asignacion_masiva_sigof():
                         st.error("Credenciales incorrectas o servidor inactivo.")
                 else:
                     st.warning("Ingresa usuario y contrasena.")
-        return # Detiene la ejecucion del resto del modulo si no esta logueado
+        return 
 
     # --- INTERFAZ DEL MODULO (Si esta logueado) ---
     col_estado, col_btn = st.columns([3, 1])
@@ -413,23 +411,23 @@ def modulo_validacion_inspecciones_field():
         with col_c:
             cla_field = st.text_input("Contrasena Field Service", type="password", key="login_cla_field")
         with col_b:
-            st.write("") # Espaciado
-            st.write("") # Espaciado
+            st.write("") 
+            st.write("") 
             if st.button("Ingresar a Field", use_container_width=True):
                 if usu_field and cla_field:
                     if iniciar_sesion_field(usu_field, cla_field):
                         st.session_state.autenticado_field = True
                         st.rerun()
                     else:
-                        st.error("Error al conectar. Verifica tus credenciales.")
+                        st.error("Error al conectar. Verifica tus credenciales o el estado del servidor.")
                 else:
                     st.warning("Ingresa usuario y contrasena.")
-        return # Detiene la ejecucion del resto del modulo si no esta logueado
+        return 
         
     # --- INTERFAZ DEL MODULO (Si esta logueado) ---
     col_estado, col_btn = st.columns([3, 1])
     with col_estado:
-        st.success("[ OK ] Sesion activa en Field Service.")
+        st.success("[ OK ] Sesion activa en la API de Field Service.")
     with col_btn:
         if st.button("Cerrar Sesion Field", use_container_width=True):
             st.session_state.autenticado_field = False
@@ -437,7 +435,7 @@ def modulo_validacion_inspecciones_field():
             st.rerun()
             
     st.divider()
-    st.info("La sesion en Field Service funciona correctamente. El desarrollo de las herramientas de inspeccion continuara en esta seccion.")
+    st.info("La sesion en la API de Field Service ha sido exitosa. La herramienta para validar inspecciones masivas se integrara aqui.")
 
 
 # ==========================================
