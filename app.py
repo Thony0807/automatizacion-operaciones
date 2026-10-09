@@ -27,21 +27,13 @@ if 'autenticado_sigof' not in st.session_state:
 # Sesion Field Service
 if 'sesion_field' not in st.session_state:
     st.session_state.sesion_field = requests.Session()
-    # Aqui se agregaran los headers especificos de Field Service cuando se analice su red
     
 if 'autenticado_field' not in st.session_state:
     st.session_state.autenticado_field = False
 
-if 'log_consola' not in st.session_state:
-    st.session_state.log_consola = []
-
 # ==========================================
 # FUNCIONES DE UTILIDAD Y CONEXION
 # ==========================================
-def consola(mensaje):
-    hora = time.strftime("%H:%M:%S")
-    st.session_state.log_consola.insert(0, f"[{hora}] {mensaje}")
-
 def iniciar_sesion_sigof(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
@@ -60,9 +52,8 @@ def iniciar_sesion_sigof(usuario, clave):
         return False
 
 def iniciar_sesion_field(usuario, clave):
-    # PLANTILLA: Aqui ira el codigo exacto de login para Field Service cuando extraigamos su HAR
+    # PLANTILLA: Aqui ira el codigo exacto de login para Field Service
     try:
-        # Simulacion de conexion exitosa para tener la estructura lista
         time.sleep(1) 
         if usuario and clave:
             return True
@@ -93,57 +84,39 @@ def crear_payload_lectura(c, s, r):
 # ==========================================
 # MODULOS DE TRABAJO
 # ==========================================
-def modulo_gestor_accesos():
-    st.header("Gestor de Conexiones de Sistemas")
-    st.markdown("Administra tus accesos a los distintos sistemas corporativos. Inicia sesion en los sistemas que requieras usar en esta jornada.")
+
+def modulo_asignacion_masiva_sigof():
+    st.header("Asignacion Masiva de Rutas (SIGOF)")
     
-    col1, col2 = st.columns(2)
-    
-    # Tarjeta de SIGOF
-    with col1:
-        st.subheader("Sistema SIGOF")
-        if not st.session_state.autenticado_sigof:
-            usu_sigof = st.text_input("Usuario", key="usu_sigof")
-            cla_sigof = st.text_input("Contrasena", type="password", key="cla_sigof")
-            if st.button("Conectar a SIGOF"):
+    # --- BLOQUE DE AUTENTICACION DEL MODULO ---
+    if not st.session_state.autenticado_sigof:
+        st.subheader("Acceso a SIGOF requerido")
+        st.info("Para utilizar este modulo, por favor inicia sesion con tus credenciales de SIGOF.")
+        usu_sigof = st.text_input("Usuario SIGOF", key="login_usu_sigof")
+        cla_sigof = st.text_input("Contrasena SIGOF", type="password", key="login_cla_sigof")
+        
+        if st.button("Ingresar a SIGOF"):
+            if usu_sigof and cla_sigof:
                 if iniciar_sesion_sigof(usu_sigof, cla_sigof):
                     st.session_state.autenticado_sigof = True
                     st.rerun()
                 else:
                     st.error("Credenciales incorrectas o servidor inactivo.")
-        else:
-            st.success("[ CONECTADO ] Sesion activa fijada en la sede Huanuco.")
-            if st.button("Desconectar SIGOF"):
-                st.session_state.autenticado_sigof = False
-                st.session_state.sesion_sigof.cookies.clear()
-                st.rerun()
+            else:
+                st.warning("Por favor ingresa usuario y contrasena.")
+        return # Detiene la ejecucion del resto del modulo si no esta logueado
 
-    # Tarjeta de Field Service
-    with col2:
-        st.subheader("Sistema Field Service")
-        if not st.session_state.autenticado_field:
-            usu_field = st.text_input("Usuario", key="usu_field")
-            cla_field = st.text_input("Contrasena", type="password", key="cla_field")
-            if st.button("Conectar a Field Service"):
-                if iniciar_sesion_field(usu_field, cla_field):
-                    st.session_state.autenticado_field = True
-                    st.rerun()
-                else:
-                    st.error("Error al conectar con Field Service.")
-        else:
-            st.success("[ CONECTADO ] Sesion activa en Field Service.")
-            if st.button("Desconectar Field Service"):
-                st.session_state.autenticado_field = False
-                st.session_state.sesion_field.cookies.clear()
-                st.rerun()
-
-
-def modulo_asignacion_masiva_sigof():
-    st.header("Asignacion Masiva de Rutas (SIGOF)")
-    
-    if not st.session_state.autenticado_sigof:
-        st.warning("Acceso denegado: Este modulo requiere conexion activa al sistema SIGOF. Ve al 'Gestor de Accesos' para iniciar sesion.")
-        return
+    # --- INTERFAZ DEL MODULO (Si esta logueado) ---
+    col_estado, col_btn = st.columns([3, 1])
+    with col_estado:
+        st.success("[ OK ] Sesion activa en SIGOF (Sede Huanuco).")
+    with col_btn:
+        if st.button("Cerrar Sesion SIGOF", use_container_width=True):
+            st.session_state.autenticado_sigof = False
+            st.session_state.sesion_sigof.cookies.clear()
+            st.rerun()
+            
+    st.divider()
 
     columnas_requeridas = ['Ciclo', 'SECTOR', 'RUTA REP.', 'ID']
     df_plantilla = pd.DataFrame(columns=columnas_requeridas)
@@ -249,7 +222,6 @@ def modulo_asignacion_masiva_sigof():
                 st.info("Iniciando asignacion masiva en SIGOF...")
                 barra_progreso = st.progress(0)
                 reporte_asignacion = []
-                st.session_state.log_consola = []
                 
                 try:
                     st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
@@ -319,7 +291,7 @@ def modulo_asignacion_masiva_sigof():
                             except ValueError:
                                 estado_final = "ERROR INTERNO"
                                 detalle_final = "Fallo en la lectura JSON desde SIGOF."
-                        except Exception as e:
+                        except Exception:
                             estado_final = "ERROR DE RED"
                             detalle_final = "Se perdio la conexion."
                             
@@ -354,10 +326,37 @@ def modulo_asignacion_masiva_sigof():
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
 
 def modulo_plantilla_field_service():
-    st.header("Modulo de Ejemplo (Field Service)")
+    st.header("Validacion de Inspecciones (Field Service)")
+    
+    # --- BLOQUE DE AUTENTICACION DEL MODULO ---
     if not st.session_state.autenticado_field:
-        st.warning("Acceso denegado: Este modulo requiere conexion activa al sistema Field Service. Ve al 'Gestor de Accesos' para iniciar sesion.")
-        return
+        st.subheader("Acceso a Field Service requerido")
+        st.info("Para utilizar este modulo, por favor inicia sesion con tus credenciales de Field Service.")
+        usu_field = st.text_input("Usuario Field Service", key="login_usu_field")
+        cla_field = st.text_input("Contrasena Field Service", type="password", key="login_cla_field")
+        
+        if st.button("Ingresar a Field Service"):
+            if usu_field and cla_field:
+                if iniciar_sesion_field(usu_field, cla_field):
+                    st.session_state.autenticado_field = True
+                    st.rerun()
+                else:
+                    st.error("Error al conectar con Field Service.")
+            else:
+                st.warning("Por favor ingresa usuario y contrasena.")
+        return # Detiene la ejecucion del resto del modulo si no esta logueado
+        
+    # --- INTERFAZ DEL MODULO (Si esta logueado) ---
+    col_estado, col_btn = st.columns([3, 1])
+    with col_estado:
+        st.success("[ OK ] Sesion activa en Field Service.")
+    with col_btn:
+        if st.button("Cerrar Sesion Field", use_container_width=True):
+            st.session_state.autenticado_field = False
+            st.session_state.sesion_field.cookies.clear()
+            st.rerun()
+            
+    st.divider()
     st.info("Aqui se programara la logica del modulo asociado al sistema Field Service una vez extraigamos sus datos de red.")
 
 # ==========================================
@@ -375,16 +374,13 @@ st.sidebar.divider()
 modulo_seleccionado = st.sidebar.radio(
     "Selecciona una herramienta:",
     (
-        "Gestor de Accesos", 
         "Asignacion Masiva de Rutas (SIGOF)", 
         "Validacion de Inspecciones (Field Service)"
     )
 )
 
 # Renderizado dinamico segun la seleccion
-if modulo_seleccionado == "Gestor de Accesos":
-    modulo_gestor_accesos()
-elif modulo_seleccionado == "Asignacion Masiva de Rutas (SIGOF)":
+if modulo_seleccionado == "Asignacion Masiva de Rutas (SIGOF)":
     modulo_asignacion_masiva_sigof()
 elif modulo_seleccionado == "Validacion de Inspecciones (Field Service)":
     modulo_plantilla_field_service()
