@@ -27,13 +27,48 @@ if 'autenticado_sigof' not in st.session_state:
 # Sesion Field Service
 if 'sesion_field' not in st.session_state:
     st.session_state.sesion_field = requests.Session()
+    # Headers extraidos del archivo HAR proporcionado
+    st.session_state.sesion_field.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "es-419,es;q=0.6",
+        "Connection": "keep-alive",
+        "Host": "servicios.distriluz.com.pe",
+        "Origin": "https://servicios.distriluz.com.pe",
+        "Referer": "https://servicios.distriluz.com.pe/FieldService/login",
+        "sec-ch-ua": '"Brave";v="155", "Chromium";v="155", "Not(A:Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Upgrade-Insecure-Requests": "1"
+    })
     
 if 'autenticado_field' not in st.session_state:
     st.session_state.autenticado_field = False
 
+if 'log_consola' not in st.session_state:
+    st.session_state.log_consola = []
+
 # ==========================================
 # FUNCIONES DE UTILIDAD Y CONEXION
 # ==========================================
+def consola(mensaje):
+    hora = time.strftime("%H:%M:%S")
+    st.session_state.log_consola.insert(0, f"[{hora}] {mensaje}")
+
+def extraer_numero(valor):
+    if pd.isna(valor): return ""
+    nums = re.findall(r'\d+', str(valor))
+    return nums[0] if nums else "0"
+
+def limpiar_html(raw_html):
+    cleanr = re.compile('<.*?>')
+    texto_limpio = re.sub(cleanr, '', str(raw_html)).strip()
+    return extraer_numero(texto_limpio)
+
+# --- LOGIN SIGOF ---
 def iniciar_sesion_sigof(usuario, clave):
     url_login = "http://sigof.distriluz.com.pe/plus/usuario/login"
     payload = {"data[Usuario][usuario]": usuario, "data[Usuario][pass]": clave}
@@ -51,59 +86,72 @@ def iniciar_sesion_sigof(usuario, clave):
         st.error(f"Error de red SIGOF: {e}")
         return False
 
+# --- LOGIN FIELD SERVICE ---
 def iniciar_sesion_field(usuario, clave):
-    # PLANTILLA: Aqui ira el codigo exacto de login para Field Service
+    url_login = "https://servicios.distriluz.com.pe/FieldService/login"
+    
     try:
-        time.sleep(1) 
-        if usuario and clave:
+        # 1. Visitar la pagina de login para obtener la cookie de sesion inicial y posibles tokens ocultos
+        res_get = st.session_state.sesion_field.get(url_login)
+        
+        # Extraer token de verificacion si existe (muy comun en ASP.NET / Blazor)
+        token_match = re.search(r'<input name="__RequestVerificationToken" type="hidden" value="(.*?)" />', res_get.text)
+        token = token_match.group(1) if token_match else ""
+        
+        # 2. Construir el payload
+        payload = {
+            "Input.Email": usuario,     # Generalmente en .NET usan estos nombres genericos
+            "Input.Password": clave,
+            "Input.RememberMachine": "false"
+        }
+        if token:
+            payload["__RequestVerificationToken"] = token
+            
+        # 3. Enviar el POST. Permitimos redireccion porque un login exitoso devuelve un 302 hacia el dashboard
+        st.session_state.sesion_field.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
+        res_post = st.session_state.sesion_field.post(url_login, data=payload, allow_redirects=True)
+        
+        # 4. Validar redireccion al dashboard o exito
+        if "dashboard" in res_post.url.lower() or res_post.status_code == 200:
+            # Revertimos header a lo normal
+            st.session_state.sesion_field.headers.pop("Content-Type", None)
             return True
+        
         return False
     except Exception as e:
         st.error(f"Error de red Field Service: {e}")
         return False
 
-def extraer_numero(valor):
-    if pd.isna(valor): return ""
-    nums = re.findall(r'\d+', str(valor))
-    return nums[0] if nums else "0"
-
-def limpiar_html(raw_html):
-    cleanr = re.compile('<.*?>')
-    texto_limpio = re.sub(cleanr, '', str(raw_html)).strip()
-    return extraer_numero(texto_limpio)
-
-def crear_payload_lectura(c, s, r):
-    return {
-        "ciclo": str(c), "sector": str(s), "ruta": str(r), "id_tipo_reparto": "N",
-        "sEcho": "1", "iColumns": "8", "sColumns": "",
-        "iDisplayStart": "0", "iDisplayLength": "5000",
-        "mDataProp_0": "0", "mDataProp_1": "1", "mDataProp_2": "2", "mDataProp_3": "3",
-        "mDataProp_4": "4", "mDataProp_5": "5", "mDataProp_6": "6", "mDataProp_7": "7"
-    }
-
 # ==========================================
 # MODULOS DE TRABAJO
 # ==========================================
 
+# ----------------------------------------------------
+# MODULO: ASIGNACION MASIVA DE RUTAS (SIGOF)
+# ----------------------------------------------------
 def modulo_asignacion_masiva_sigof():
     st.header("Asignacion Masiva de Rutas (SIGOF)")
     
-    # --- BLOQUE DE AUTENTICACION DEL MODULO ---
+    # --- BLOQUE DE AUTENTICACION ---
     if not st.session_state.autenticado_sigof:
-        st.subheader("Acceso a SIGOF requerido")
-        st.info("Para utilizar este modulo, por favor inicia sesion con tus credenciales de SIGOF.")
-        usu_sigof = st.text_input("Usuario SIGOF", key="login_usu_sigof")
-        cla_sigof = st.text_input("Contrasena SIGOF", type="password", key="login_cla_sigof")
-        
-        if st.button("Ingresar a SIGOF"):
-            if usu_sigof and cla_sigof:
-                if iniciar_sesion_sigof(usu_sigof, cla_sigof):
-                    st.session_state.autenticado_sigof = True
-                    st.rerun()
+        st.info("Por favor, inicia sesion con tus credenciales de SIGOF para utilizar este modulo.")
+        col_u, col_c, col_b = st.columns([2, 2, 1])
+        with col_u:
+            usu_sigof = st.text_input("Usuario SIGOF", key="login_usu_sigof")
+        with col_c:
+            cla_sigof = st.text_input("Contrasena SIGOF", type="password", key="login_cla_sigof")
+        with col_b:
+            st.write("") # Espaciado
+            st.write("") # Espaciado
+            if st.button("Ingresar a SIGOF", use_container_width=True):
+                if usu_sigof and cla_sigof:
+                    if iniciar_sesion_sigof(usu_sigof, cla_sigof):
+                        st.session_state.autenticado_sigof = True
+                        st.rerun()
+                    else:
+                        st.error("Credenciales incorrectas o servidor inactivo.")
                 else:
-                    st.error("Credenciales incorrectas o servidor inactivo.")
-            else:
-                st.warning("Por favor ingresa usuario y contrasena.")
+                    st.warning("Ingresa usuario y contrasena.")
         return # Detiene la ejecucion del resto del modulo si no esta logueado
 
     # --- INTERFAZ DEL MODULO (Si esta logueado) ---
@@ -164,6 +212,15 @@ def modulo_asignacion_masiva_sigof():
                     elif col_upper == "ID": i = val
                 return c, s, r, i
 
+            def crear_payload_lectura(c, s, r):
+                return {
+                    "ciclo": str(c), "sector": str(s), "ruta": str(r), "id_tipo_reparto": "N",
+                    "sEcho": "1", "iColumns": "8", "sColumns": "",
+                    "iDisplayStart": "0", "iDisplayLength": "5000",
+                    "mDataProp_0": "0", "mDataProp_1": "1", "mDataProp_2": "2", "mDataProp_3": "3",
+                    "mDataProp_4": "4", "mDataProp_5": "5", "mDataProp_6": "6", "mDataProp_7": "7"
+                }
+
             if btn_analizar:
                 st.info("Analizando rutas en SIGOF...")
                 barra_progreso = st.progress(0)
@@ -222,6 +279,7 @@ def modulo_asignacion_masiva_sigof():
                 st.info("Iniciando asignacion masiva en SIGOF...")
                 barra_progreso = st.progress(0)
                 reporte_asignacion = []
+                st.session_state.log_consola = []
                 
                 try:
                     st.session_state.sesion_sigof.get("http://sigof.distriluz.com.pe/plus/ComrepOrdenrepartos/listar_asignacion")
@@ -244,6 +302,7 @@ def modulo_asignacion_masiva_sigof():
                         detalle_final = f"Datos faltantes en Excel: {', '.join(faltantes)}."
                     else:
                         payload_leer = crear_payload_lectura(ciclo, sector, ruta)
+                        consola(f"Analizando ruta {ruta}...")
                         
                         try:
                             res_leer = st.session_state.sesion_sigof.post(url_leer, data=payload_leer)
@@ -251,6 +310,7 @@ def modulo_asignacion_masiva_sigof():
                             if "login" in res_leer.url:
                                 estado_final = "ERROR CRITICO"
                                 detalle_final = "La sesion en SIGOF ha caducado."
+                                consola("ERROR CRITICO: Redireccion a login (Sesion caducada).")
                                 reporte_asignacion.append({"Ciclo": ciclo, "SECTOR": sector, "RUTA REP.": ruta, "ID": id_lec, "Estado Final": estado_final, "Detalle": detalle_final})
                                 break
                             
@@ -263,6 +323,7 @@ def modulo_asignacion_masiva_sigof():
                                     if lecturista_actual and lecturista_actual.lower() != "none" and lecturista_actual != "":
                                         estado_final = "IGNORADO"
                                         detalle_final = f"Ruta ya asignada a: {lecturista_actual}."
+                                        consola(f"Ruta {ruta} ignorada (Ocupada por {lecturista_actual}).")
                                     else:
                                         suministro_inicio = limpiar_html(datos["aaData"][0][2])
                                         suministro_fin = limpiar_html(datos["aaData"][-1][2])
@@ -282,18 +343,23 @@ def modulo_asignacion_masiva_sigof():
                                         if res_guardar.status_code == 200:
                                             estado_final = "ASIGNADO"
                                             detalle_final = f"Ruta asignada al ID {id_lec}."
+                                            consola(f"Ruta {ruta} guardada OK.")
                                         else:
                                             estado_final = "ERROR DE GUARDADO"
                                             detalle_final = f"SIGOF rechazo la peticion. Codigo: {res_guardar.status_code}."
+                                            consola(f"ERROR {res_guardar.status_code} en ruta {ruta}.")
                                 else:
                                     estado_final = "NO ASIGNADO"
                                     detalle_final = "La ruta esta VACIA (Sin recibos)."
+                                    consola(f"Ruta {ruta} vacia, se omite.")
                             except ValueError:
                                 estado_final = "ERROR INTERNO"
                                 detalle_final = "Fallo en la lectura JSON desde SIGOF."
-                        except Exception:
+                                consola(f"Ruta {ruta} devolvio texto no JSON.")
+                        except Exception as e:
                             estado_final = "ERROR DE RED"
                             detalle_final = "Se perdio la conexion."
+                            consola(f"Error de red en ruta {ruta}: {str(e)}")
                             
                     reporte_asignacion.append({
                         "Ciclo": ciclo, 
@@ -322,28 +388,42 @@ def modulo_asignacion_masiva_sigof():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
+            st.divider()
+            st.subheader("Consola de Registros Detallados")
+            if st.session_state.log_consola:
+                st.text_area("Eventos de red y errores del servidor:", value="\n".join(st.session_state.log_consola), height=300)
+            else:
+                st.info("La consola esta esperando operaciones...")
+
         else:
             st.error("Tu Excel debe tener las columnas 'Ciclo', 'SECTOR', 'RUTA REP.' e 'ID'.")
 
-def modulo_plantilla_field_service():
+# ----------------------------------------------------
+# MODULO: VALIDACION DE INSPECCIONES (FIELD SERVICE)
+# ----------------------------------------------------
+def modulo_validacion_inspecciones_field():
     st.header("Validacion de Inspecciones (Field Service)")
     
-    # --- BLOQUE DE AUTENTICACION DEL MODULO ---
+    # --- BLOQUE DE AUTENTICACION ---
     if not st.session_state.autenticado_field:
-        st.subheader("Acceso a Field Service requerido")
-        st.info("Para utilizar este modulo, por favor inicia sesion con tus credenciales de Field Service.")
-        usu_field = st.text_input("Usuario Field Service", key="login_usu_field")
-        cla_field = st.text_input("Contrasena Field Service", type="password", key="login_cla_field")
-        
-        if st.button("Ingresar a Field Service"):
-            if usu_field and cla_field:
-                if iniciar_sesion_field(usu_field, cla_field):
-                    st.session_state.autenticado_field = True
-                    st.rerun()
+        st.info("Por favor, inicia sesion con tus credenciales de Field Service para utilizar este modulo.")
+        col_u, col_c, col_b = st.columns([2, 2, 1])
+        with col_u:
+            usu_field = st.text_input("Usuario Field Service", key="login_usu_field")
+        with col_c:
+            cla_field = st.text_input("Contrasena Field Service", type="password", key="login_cla_field")
+        with col_b:
+            st.write("") # Espaciado
+            st.write("") # Espaciado
+            if st.button("Ingresar a Field", use_container_width=True):
+                if usu_field and cla_field:
+                    if iniciar_sesion_field(usu_field, cla_field):
+                        st.session_state.autenticado_field = True
+                        st.rerun()
+                    else:
+                        st.error("Error al conectar. Verifica tus credenciales.")
                 else:
-                    st.error("Error al conectar con Field Service.")
-            else:
-                st.warning("Por favor ingresa usuario y contrasena.")
+                    st.warning("Ingresa usuario y contrasena.")
         return # Detiene la ejecucion del resto del modulo si no esta logueado
         
     # --- INTERFAZ DEL MODULO (Si esta logueado) ---
@@ -357,7 +437,8 @@ def modulo_plantilla_field_service():
             st.rerun()
             
     st.divider()
-    st.info("Aqui se programara la logica del modulo asociado al sistema Field Service una vez extraigamos sus datos de red.")
+    st.info("La sesion en Field Service funciona correctamente. El desarrollo de las herramientas de inspeccion continuara en esta seccion.")
+
 
 # ==========================================
 # RUTADOR PRINCIPAL (SIDEBAR)
@@ -383,4 +464,4 @@ modulo_seleccionado = st.sidebar.radio(
 if modulo_seleccionado == "Asignacion Masiva de Rutas (SIGOF)":
     modulo_asignacion_masiva_sigof()
 elif modulo_seleccionado == "Validacion de Inspecciones (Field Service)":
-    modulo_plantilla_field_service()
+    modulo_validacion_inspecciones_field()
